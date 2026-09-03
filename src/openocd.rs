@@ -40,6 +40,13 @@ impl SessionError {
             retryable: true,
         }
     }
+
+    fn restore(message: impl Into<String>) -> Self {
+        Self::fatal(format!(
+            "could not restore the target entry state; the target can remain halted: {}",
+            message.into()
+        ))
+    }
 }
 
 pub(crate) struct Session {
@@ -227,11 +234,14 @@ impl Session {
         if !self.resume_on_drop {
             return Ok(());
         }
-        self.run_inner("resume")?;
-        let state = self.value_inner("$_TARGETNAME curstate")?;
+        self.run_inner("resume")
+            .map_err(|error| SessionError::restore(error.message))?;
+        let state = self
+            .value_inner("$_TARGETNAME curstate")
+            .map_err(|error| SessionError::restore(error.message))?;
         if state != "running" {
-            return Err(SessionError::fatal(format!(
-                "could not restore the target state: expected running, got {state}"
+            return Err(SessionError::restore(format!(
+                "expected running, got {state}"
             )));
         }
         self.resume_on_drop = false;
@@ -494,6 +504,13 @@ mod tests {
             .args(["/C", "exit", "0"])
             .spawn()
             .unwrap()
+    }
+
+    #[test]
+    fn does_not_retry_a_failed_state_restore() {
+        let error = SessionError::restore("lost response");
+        assert!(!error.retryable);
+        assert!(error.message.contains("target can remain halted"));
     }
 
     #[test]
