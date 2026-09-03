@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM ubuntu:24.04 AS build
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -12,14 +11,13 @@ RUN apt-get update \
         binutils-mingw-w64-x86-64 \
         ca-certificates \
         curl \
-        dpkg-dev \
         gcc \
         gcc-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --profile minimal --default-toolchain 1.97.1 \
-    && rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
+    && rustup target add x86_64-pc-windows-gnu
 
 WORKDIR /work
 COPY Cargo.toml Cargo.lock ./
