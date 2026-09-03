@@ -288,12 +288,14 @@ fn validate_part_range(part: &FlashPart, flash_end: u32) -> AppResult<Range<u32>
 
 pub(crate) fn write_part(session: &mut Session, part: &FlashPart, erase: bool) -> AppResult<()> {
     let path = tcl_literal(&path_string(&part.file)?);
-    let location = format!(" {:#x} bin", part.addr);
     let label = format!("{} @ {:#010x}", part.file.display(), part.addr);
     println!("Programming {label}...");
     let erase = if erase { " erase" } else { "" };
     let output = session
-        .run(&format!("flash write_image{erase} unlock {path}{location}"))
+        .run(&format!(
+            "flash write_image{erase} unlock {path} {:#x} bin",
+            part.addr
+        ))
         .map_err(AppError::flash_incomplete)?;
     println!("ok: wrote {label}");
     if !output.is_empty() {
@@ -304,10 +306,9 @@ pub(crate) fn write_part(session: &mut Session, part: &FlashPart, erase: bool) -
 
 pub(crate) fn verify_part(session: &mut Session, part: &FlashPart) -> AppResult<()> {
     let path = tcl_literal(&path_string(&part.file)?);
-    let address = format!(" {:#x}", part.addr);
     println!("Verifying {}...", part.file.display());
     session
-        .run(&format!("verify_image {path}{address}"))
+        .run(&format!("verify_image {path} {:#x}", part.addr))
         .map_err(AppError::flash_incomplete)?;
     println!("ok: verified {}", part.file.display());
     Ok(())

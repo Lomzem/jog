@@ -1,4 +1,4 @@
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::env;
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
@@ -82,22 +82,16 @@ enum Commands {
         target: String,
         #[arg(short = 'a', long, help = "Flash address or offset for a raw .bin")]
         addr: Option<String>,
-        #[arg(long, action = ArgAction::SetTrue, overrides_with = "no_verify", help = "Verify after programming (default)")]
-        verify: bool,
-        #[arg(long = "no-verify", action = ArgAction::SetTrue, overrides_with = "verify", help = "Do not verify after programming")]
+        #[arg(long, help = "Do not verify after programming")]
         no_verify: bool,
-        #[arg(long, action = ArgAction::SetTrue, overrides_with = "no_run", help = "Reset and run after programming (default)")]
-        run: bool,
-        #[arg(long = "no-run", action = ArgAction::SetTrue, overrides_with = "run", help = "Do not reset after programming")]
+        #[arg(long, help = "Do not reset after programming")]
         no_run: bool,
     },
     /// Select Flash or ROM (SAM-BA) boot
     Boot {
         #[arg(value_enum)]
         mode: BootMode,
-        #[arg(long, action = ArgAction::SetTrue, overrides_with = "no_reset", help = "Reset after the change (default)")]
-        reset: bool,
-        #[arg(long = "no-reset", action = ArgAction::SetTrue, overrides_with = "reset", help = "Do not reset after the change")]
+        #[arg(long, help = "Do not reset after the change")]
         no_reset: bool,
     },
     /// Read or change GPNVM bits
@@ -171,11 +165,7 @@ pub(crate) fn run() -> AppResult<()> {
 }
 
 fn execute(cli: &Cli) -> AppResult<()> {
-    if cli
-        .serial
-        .as_ref()
-        .is_some_and(|serial| serial.contains('\0'))
-    {
+    if cli.serial.as_ref().is_some_and(|s| s.contains('\0')) {
         return Err(AppError::Usage("serial number contains a null byte".into()));
     }
     let options = OpenOcdOptions {
@@ -194,9 +184,8 @@ fn execute(cli: &Cli) -> AppResult<()> {
             addr,
             no_verify,
             no_run,
-            ..
         } => command_flash(cli, &options, target, addr.as_deref(), !no_verify, !no_run),
-        Commands::Boot { mode, no_reset, .. } => command_boot(&options, mode, !no_reset),
+        Commands::Boot { mode, no_reset } => command_boot(&options, mode, !no_reset),
         Commands::Gpnvm { command } => command_gpnvm(&options, command),
         Commands::Erase { start, end, yes } => {
             command_erase(&options, start.as_deref(), end.as_deref(), *yes)
@@ -241,7 +230,7 @@ fn command_info(options: &OpenOcdOptions) -> AppResult<()> {
     println!("  Core          Cortex-M4, {state}");
     println!(
         "  Link          {} @ {} kHz via Atmel-ICE",
-        options.transport.to_string().to_uppercase(),
+        options.transport.to_uppercase(),
         options.speed
     );
     if chip.cidr_flash_kb() != chip.flash.size / 1024 {
