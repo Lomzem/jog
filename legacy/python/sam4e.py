@@ -34,7 +34,7 @@ from rich.table import Table
 
 HERE = Path(__file__).resolve().parent
 CFG = HERE / "sam4e.cfg"
-IMAGES_TOML = HERE / "sam4e.toml"
+IMAGES_TOML = HERE.parent.parent / "sam4e.toml"
 
 # Windows consoles often default to cp1252, which cannot encode the box-drawing
 # and spinner glyphs rich emits.

@@ -8,11 +8,31 @@ target access. The default link is SWD at 400 kHz.
 Install OpenOCD. The tested version is 0.12. Make sure that `openocd` is on
 `PATH` and that its script tree contains `target/at91sam4XXX.cfg`.
 
-Use `sam4e.exe` on Windows x64. Use `sam4e` on Linux x64.
+Use `sam4e.exe` on Windows x64. Install the Debian package on Ubuntu 24.04
+amd64.
 
-The Python version remains temporarily for hardware checks. The Rust version
-intentionally rejects unsafe image combinations that the Python version
-accepted. Complete the hardware checks before you remove the Python version.
+## Build release files
+
+On a Linux host, start Docker and run:
+
+```text
+./build.sh
+```
+
+The script writes only these release files to `dist`:
+
+```text
+dist/sam4e-0.1.0-windows-x86_64.exe
+dist/sam4e_0.1.0_amd64.deb
+```
+
+The version comes from `Cargo.toml`. Install the Debian package with:
+
+```text
+sudo apt install ./dist/sam4e_0.1.0_amd64.deb
+```
+
+The package installs `/usr/bin/sam4e` and requires OpenOCD.
 
 ## Start
 
@@ -96,3 +116,13 @@ safety checks.
 Use SWD unless the target requires JTAG. The tested Atmel-ICE firmware corrupted
 large block transfers above approximately 500 kHz. Keep the 400 kHz default
 until a test proves that another speed is reliable on the applicable probe.
+
+## Temporary Python version
+
+The Python version remains in `legacy/python` for hardware checks. Run
+`legacy/python/sam4e` on Linux or `legacy\python\sam4e.cmd` on Windows. These
+launchers use the root `sam4e.toml` file.
+
+The Rust version intentionally rejects unsafe image combinations that the
+Python version accepted. Complete the hardware checks before you remove the
+Python version.

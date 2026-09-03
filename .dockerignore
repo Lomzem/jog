@@ -1,0 +1,10 @@
+.git/
+target/
+dist/
+backups/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+legacy/
