@@ -27,13 +27,16 @@ COPY src ./src
 COPY README.md ./
 ARG PACKAGE_VERSION
 RUN test -n "$PACKAGE_VERSION" \
-    && cargo build --release --locked --target x86_64-unknown-linux-gnu \
+    && cargo test --release --locked --target x86_64-unknown-linux-gnu \
+    && cargo test --release --locked --target x86_64-pc-windows-gnu --no-run \
     && cargo build --release --locked --target x86_64-pc-windows-gnu \
     && install -Dm0755 target/x86_64-unknown-linux-gnu/release/sam4e /package/usr/bin/sam4e \
     && strip /package/usr/bin/sam4e \
+    && /package/usr/bin/sam4e --version \
     && install -Dm0644 README.md /package/usr/share/doc/sam4e/README.md \
     && install -Dm0755 target/x86_64-pc-windows-gnu/release/sam4e.exe "/out/sam4e-${PACKAGE_VERSION}-windows-x86_64.exe" \
     && x86_64-w64-mingw32-strip "/out/sam4e-${PACKAGE_VERSION}-windows-x86_64.exe" \
+    && x86_64-w64-mingw32-objdump -f "/out/sam4e-${PACKAGE_VERSION}-windows-x86_64.exe" \
     && mkdir -p /package/DEBIAN \
     && printf '%s\n' \
         'Package: sam4e' \
