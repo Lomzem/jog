@@ -21,9 +21,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 
 WORKDIR /work
 COPY Cargo.toml Cargo.lock ./
+COPY src ./src
 RUN cargo fetch --locked
 
-COPY src ./src
 COPY README.md ./
 ARG PACKAGE_VERSION
 RUN test -n "$PACKAGE_VERSION" \
