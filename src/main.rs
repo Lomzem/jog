@@ -5,6 +5,7 @@ mod target;
 
 use std::fmt;
 
+#[derive(Debug)]
 enum AppError {
     Usage(String),
     Runtime(String),

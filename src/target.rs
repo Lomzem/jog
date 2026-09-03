@@ -13,10 +13,8 @@ const SAM4E8C_EXID: u32 = 0x0012_0209;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct FlashDescriptor {
-    pub(crate) id: u32,
     pub(crate) size: u32,
     pub(crate) page_size: u32,
-    pub(crate) planes: u32,
     pub(crate) lock_regions: u32,
     pub(crate) lock_size: u32,
 }
@@ -52,14 +50,6 @@ impl ChipInfo {
             exid,
             flash: parse_descriptor(&descriptor)?,
         })
-    }
-
-    pub(crate) fn name(&self) -> String {
-        if self.exid == SAM4E8C_EXID {
-            "SAM4E8C".into()
-        } else {
-            format!("unsupported (EXID {:#010x})", self.exid)
-        }
     }
 
     pub(crate) fn cidr_flash_kb(&self) -> u32 {
@@ -141,10 +131,8 @@ fn parse_descriptor(words: &[u32]) -> AppResult<FlashDescriptor> {
         return Err(AppError::Runtime("EEFC reports a zero page size".into()));
     }
     Ok(FlashDescriptor {
-        id: words[0],
         size: words[1],
         page_size: words[2],
-        planes: words[3],
         lock_regions: words[lock_index],
         lock_size: words[lock_index + 1],
     })
@@ -172,32 +160,15 @@ pub(crate) fn normalize_flash_addr(value: u64) -> AppResult<u32> {
 mod tests {
     use super::*;
 
-    fn ok<T>(result: AppResult<T>) -> T {
-        match result {
-            Ok(value) => value,
-            Err(error) => panic!("{error}"),
-        }
-    }
-
     #[test]
     fn parses_descriptor_with_reported_plane_count() {
-        let descriptor = ok(parse_descriptor(&[
-            1,
-            1024 * 1024,
-            512,
-            2,
-            512 * 1024,
-            512 * 1024,
-            128,
-            8192,
-        ]));
+        let descriptor =
+            parse_descriptor(&[1, 1024 * 1024, 512, 2, 512 * 1024, 512 * 1024, 128, 8192]).unwrap();
         assert_eq!(
             descriptor,
             FlashDescriptor {
-                id: 1,
                 size: 1024 * 1024,
                 page_size: 512,
-                planes: 2,
                 lock_regions: 128,
                 lock_size: 8192,
             }

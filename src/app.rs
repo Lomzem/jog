@@ -2,6 +2,7 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use std::env;
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -106,7 +107,7 @@ enum Commands {
     },
     /// Erase all flash or an address range
     Erase {
-        #[arg(long)]
+        #[arg(long, help = "Flash address or offset")]
         start: Option<String>,
         #[arg(long, help = "Exclusive end address")]
         end: Option<String>,
@@ -119,7 +120,7 @@ enum Commands {
         addr: String,
         #[arg(help = "Number of bytes")]
         length: String,
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = "Write binary data to this file")]
         out: Option<PathBuf>,
     },
     /// Reset the target
@@ -133,7 +134,7 @@ enum Commands {
     Resume,
     /// Run an OpenOCD GDB server until interrupted
     Gdb {
-        #[arg(short = 'p', long, default_value_t = 3333, value_parser = parse_port)]
+        #[arg(short = 'p', long, default_value_t = 3333, value_parser = clap::value_parser!(u16).range(1..))]
         port: u16,
     },
     /// Advanced: run raw OpenOCD Tcl without sam4e safety checks
@@ -212,7 +213,7 @@ fn command_info(options: &OpenOcdOptions) -> AppResult<()> {
     let state = session.entry_state();
 
     println!("SAM4E");
-    println!("  Part          {}", chip.name());
+    println!("  Part          SAM4E8C");
     println!(
         "  CHIPID        CIDR={:#010x} EXID={:#010x}",
         chip.cidr, chip.exid
@@ -245,7 +246,7 @@ fn command_info(options: &OpenOcdOptions) -> AppResult<()> {
         );
     }
     print_gpnvm(bits);
-    Ok(())
+    session.restore_entry_state()
 }
 
 fn command_images(cli: &Cli) -> AppResult<()> {
@@ -307,11 +308,7 @@ fn command_flash(
             for range in ranges {
                 println!("Erasing {:#010x}-{:#010x}...", range.start, range.end - 1);
                 session
-                    .run(&format!(
-                        "flash erase_address unlock {:#x} {:#x}",
-                        range.start,
-                        range.end - range.start
-                    ))
+                    .run(&erase_range_command(&range))
                     .map_err(AppError::flash_incomplete)?;
             }
             for part in &parts {
@@ -331,12 +328,24 @@ fn command_flash(
     Ok(())
 }
 
+fn erase_range_command(range: &Range<u32>) -> String {
+    format!(
+        "flash erase_address pad unlock {:#x} {:#x}",
+        range.start,
+        range.end - range.start
+    )
+}
+
 fn command_boot(options: &OpenOcdOptions, mode: &BootMode, reset_now: bool) -> AppResult<()> {
     let wanted = match mode {
         BootMode::Flash => 1,
         BootMode::Rom => 0,
     };
-    let mut session = connect(options)?;
+    let mut session = if reset_now {
+        connect(options)?
+    } else {
+        connect_read_only(options)?
+    };
     require_sam4e8c(&mut session)?;
     let before = read_gpnvm(&mut session)?;
     if before[1] == wanted {
@@ -365,8 +374,10 @@ fn command_boot(options: &OpenOcdOptions, mode: &BootMode, reset_now: bool) -> A
     if reset_now {
         session.run("reset run")?;
         println!("ok: device reset");
+        Ok(())
+    } else {
+        session.restore_entry_state()
     }
-    Ok(())
 }
 
 fn command_gpnvm(options: &OpenOcdOptions, command: &GpnvmCommand) -> AppResult<()> {
@@ -375,7 +386,7 @@ fn command_gpnvm(options: &OpenOcdOptions, command: &GpnvmCommand) -> AppResult<
             let mut session = connect_read_only(options)?;
             require_sam4e8c(&mut session)?;
             print_gpnvm(read_gpnvm(&mut session)?);
-            Ok(())
+            session.restore_entry_state()
         }
         GpnvmCommand::Set { bit, force } => gpnvm_write(options, *bit, 1, *force),
         GpnvmCommand::Clear { bit } => gpnvm_write(options, *bit, 0, false),
@@ -490,6 +501,7 @@ fn command_read(
         path_string(path)?;
     }
     let mut session = connect_read_only(options)?;
+    require_sam4e8c(&mut session)?;
     if let Some(path) = output {
         println!("Reading {length} bytes from {address:#010x}...");
         session.run(&format!(
@@ -497,7 +509,7 @@ fn command_read(
             tcl_literal(&path_string(&path)?)
         ))?;
         println!("ok: wrote {length} bytes to {}", path.display());
-        return Ok(());
+        return session.restore_entry_state();
     }
 
     let words = session.read32(address, length.saturating_add(3) / 4)?;
@@ -529,11 +541,12 @@ fn command_read(
             text
         );
     }
-    Ok(())
+    session.restore_entry_state()
 }
 
 fn command_reset(options: &OpenOcdOptions, halt: bool) -> AppResult<()> {
     let mut session = connect(options)?;
+    require_sam4e8c(&mut session)?;
     session.run(if halt { "reset halt" } else { "reset run" })?;
     println!("ok: reset ({})", if halt { "halted" } else { "running" });
     Ok(())
@@ -541,18 +554,25 @@ fn command_reset(options: &OpenOcdOptions, halt: bool) -> AppResult<()> {
 
 fn command_halt(options: &OpenOcdOptions) -> AppResult<()> {
     let mut session = connect(options)?;
+    require_sam4e8c(&mut session)?;
     println!("ok: core {}", session.value("$_TARGETNAME curstate")?);
     Ok(())
 }
 
 fn command_resume(options: &OpenOcdOptions) -> AppResult<()> {
     let mut session = connect(options)?;
+    require_sam4e8c(&mut session)?;
     session.run("resume")?;
     println!("ok: running");
     Ok(())
 }
 
 fn command_gdb(options: &OpenOcdOptions, port: u16) -> AppResult<()> {
+    let mut session = connect_read_only(options)?;
+    require_sam4e8c(&mut session)?;
+    session.restore_entry_state()?;
+    drop(session);
+
     println!("GDB server: localhost:{port}");
     println!("arm-none-eabi-gdb -ex \"target extended-remote :{port}\" your.elf");
     let args = openocd_args(options, None, Some(port));
@@ -654,17 +674,6 @@ fn parse_positive_usize(text: &str, name: &str) -> AppResult<usize> {
     usize::try_from(value).map_err(|_| AppError::Usage(format!("{name} is too large")))
 }
 
-fn parse_port(text: &str) -> Result<u16, String> {
-    let port = text
-        .parse::<u16>()
-        .map_err(|_| "port must be between 1 and 65535".to_owned())?;
-    if port == 0 {
-        Err("port must be between 1 and 65535".into())
-    } else {
-        Ok(port)
-    }
-}
-
 fn absolute_path(path: &Path) -> AppResult<PathBuf> {
     if path.is_absolute() {
         Ok(path.to_owned())
@@ -699,13 +708,6 @@ fn confirm(prompt: &str) -> AppResult<bool> {
 mod tests {
     use super::*;
 
-    fn ok<T>(result: AppResult<T>) -> T {
-        match result {
-            Ok(value) => value,
-            Err(error) => panic!("{error}"),
-        }
-    }
-
     #[test]
     fn parses_supported_numbers() {
         assert_eq!(parse_number("0x400000").unwrap(), 0x400000);
@@ -718,15 +720,23 @@ mod tests {
 
     #[test]
     fn normalizes_flash_offsets() {
-        assert_eq!(ok(parse_flash_addr("0x7a000")), 0x0047a000);
-        assert_eq!(ok(parse_flash_addr("0x47a000")), 0x0047a000);
+        assert_eq!(parse_flash_addr("0x7a000").unwrap(), 0x0047a000);
+        assert_eq!(parse_flash_addr("0x47a000").unwrap(), 0x0047a000);
         assert!(parse_flash_addr("8G").is_err());
     }
 
     #[test]
     fn keeps_read_addresses_absolute() {
-        assert_eq!(ok(parse_absolute_addr("0x00100000")), 0x00100000);
+        assert_eq!(parse_absolute_addr("0x00100000").unwrap(), 0x00100000);
         assert!(parse_absolute_addr("8G").is_err());
+    }
+
+    #[test]
+    fn pads_multi_part_flash_erase_ranges() {
+        assert_eq!(
+            erase_range_command(&(FLASH_BASE + 1..FLASH_BASE + 5)),
+            "flash erase_address pad unlock 0x400001 0x4"
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -63,9 +63,12 @@ fn connect_with_policy(options: &OpenOcdOptions, restore_entry_state: bool) -> A
     for attempt in 1..=3 {
         match Session::start(options).and_then(|mut session| {
             let state = session.value_inner("$_TARGETNAME curstate")?;
-            session.run_inner("halt")?;
             session.resume_on_drop = restore_entry_state && state == "running";
             session.entry_state = state;
+            if let Err(error) = session.run_inner("halt") {
+                session.restore_entry_state_inner()?;
+                return Err(error);
+            }
             Ok(session)
         }) {
             Ok(session) => return Ok(session),
@@ -138,9 +141,7 @@ impl Session {
                 )));
             }
             match TcpStream::connect_timeout(
-                &format!("127.0.0.1:{port}")
-                    .parse()
-                    .expect("valid local address"),
+                &SocketAddr::from(([127, 0, 0, 1], port)),
                 Duration::from_millis(250),
             ) {
                 Ok(stream) => {
@@ -222,6 +223,26 @@ impl Session {
         &self.entry_state
     }
 
+    fn restore_entry_state_inner(&mut self) -> Result<(), SessionError> {
+        if !self.resume_on_drop {
+            return Ok(());
+        }
+        self.run_inner("resume")?;
+        let state = self.value_inner("$_TARGETNAME curstate")?;
+        if state != "running" {
+            return Err(SessionError::fatal(format!(
+                "could not restore the target state: expected running, got {state}"
+            )));
+        }
+        self.resume_on_drop = false;
+        Ok(())
+    }
+
+    pub(crate) fn restore_entry_state(&mut self) -> AppResult<()> {
+        self.restore_entry_state_inner()
+            .map_err(|error| AppError::Runtime(error.message))
+    }
+
     pub(crate) fn read32(&mut self, address: u32, count: usize) -> AppResult<Vec<u32>> {
         self.value(&format!("read_memory {address:#x} 32 {count}"))?
             .split_whitespace()
@@ -277,7 +298,7 @@ fn format_log_tail(log: &Arc<Mutex<VecDeque<String>>>, count: usize) -> String {
 impl Drop for Session {
     fn drop(&mut self) {
         if self.resume_on_drop {
-            let _ = self.run_inner("resume");
+            let _ = self.restore_entry_state_inner();
         }
         if let Some(mut socket) = self.socket.take() {
             let _ = socket.write_all(b"shutdown\x1a");
@@ -337,6 +358,7 @@ pub(crate) fn openocd_args(
         // The common Atmel-ICE header has no SRST, so reset uses SYSRESETREQ.
         "reset_config none".to_owned(),
         format!("adapter speed {}", options.speed),
+        "bindto 127.0.0.1".to_owned(),
         format!(
             "tcl_port {}",
             tcl_port.map_or_else(|| "disabled".to_owned(), |port| port.to_string())
@@ -422,6 +444,59 @@ mod tests {
     }
 
     #[test]
+    fn restores_running_entry_state_with_a_checked_response() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let server_thread = thread::spawn(move || {
+            let mut request = read_request(&mut server);
+            assert!(String::from_utf8_lossy(&request).contains("resume"));
+            server
+                .write_all(format!("0\n{MARK}\n\x1a").as_bytes())
+                .unwrap();
+
+            request = read_request(&mut server);
+            assert_eq!(&request[..request.len() - 1], b"$_TARGETNAME curstate");
+            server.write_all(b"running\x1a").unwrap();
+        });
+        let child = test_child();
+        let mut session = Session {
+            child,
+            socket: Some(client),
+            log: Arc::new(Mutex::new(VecDeque::new())),
+            entry_state: "running".into(),
+            resume_on_drop: true,
+        };
+
+        session.restore_entry_state().unwrap();
+        assert!(!session.resume_on_drop);
+        server_thread.join().unwrap();
+    }
+
+    fn read_request(stream: &mut TcpStream) -> Vec<u8> {
+        let mut request = Vec::new();
+        while !request.ends_with(&[RPC_EOM]) {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+        }
+        request
+    }
+
+    #[cfg(unix)]
+    fn test_child() -> Child {
+        Command::new("true").spawn().unwrap()
+    }
+
+    #[cfg(windows)]
+    fn test_child() -> Child {
+        Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
     fn parses_captured_openocd_responses() {
         assert_eq!(
             parse_run_response(&format!("0\n{MARK}\n output \n"), "halt")
@@ -448,6 +523,7 @@ mod tests {
             .join(" ");
         assert!(text.contains("source [find target/at91sam4XXX.cfg]"));
         assert!(text.contains("adapter serial \"A \\$B\""));
+        assert!(text.contains("bindto 127.0.0.1"));
         assert!(text.contains("tcl_port 1234"));
         assert!(text.contains("gdb_port disabled"));
         assert!(!text.contains(" -f "));
