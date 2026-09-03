@@ -76,9 +76,9 @@ enum Commands {
     Info,
     /// List named images
     Images,
-    /// Program a named image or image file
+    /// Program a named image or raw BIN file
     Flash {
-        #[arg(help = "Image name or file")]
+        #[arg(help = "Image name or raw .bin file")]
         target: String,
         #[arg(short = 'a', long, help = "Flash address or offset for a raw .bin")]
         addr: Option<String>,
@@ -268,10 +268,7 @@ fn command_images(cli: &Cli) -> AppResult<()> {
                 .unwrap_or_default()
         );
         for part in image.parts {
-            let location = match part.addr {
-                Some(address) => format!("{:#010x}", normalize_flash_addr(address)?),
-                None => "in image".to_owned(),
-            };
+            let location = format!("{:#010x}", normalize_flash_addr(part.addr)?);
             let missing = if part.file.is_file() {
                 ""
             } else {
@@ -685,11 +682,7 @@ fn absolute_path(path: &Path) -> AppResult<PathBuf> {
 }
 
 fn confirm(prompt: &str) -> AppResult<bool> {
-    if !io::stdin().is_terminal() {
-        return Err(AppError::Usage(
-            "confirmation needs a terminal. Use --yes for non-interactive use.".into(),
-        ));
-    }
+    require_confirmation_terminals(io::stdin().is_terminal(), io::stderr().is_terminal())?;
     eprint!("{prompt} [y/N] ");
     io::stderr()
         .flush()
@@ -704,9 +697,27 @@ fn confirm(prompt: &str) -> AppResult<bool> {
     ))
 }
 
+fn require_confirmation_terminals(input: bool, error_output: bool) -> AppResult<()> {
+    if input && error_output {
+        Ok(())
+    } else {
+        Err(AppError::Usage(
+            "confirmation needs terminal input and error output. Use --yes for non-interactive use."
+                .into(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requires_visible_interactive_confirmation() {
+        assert!(require_confirmation_terminals(true, true).is_ok());
+        assert!(require_confirmation_terminals(false, true).is_err());
+        assert!(require_confirmation_terminals(true, false).is_err());
+    }
 
     #[test]
     fn parses_supported_numbers() {

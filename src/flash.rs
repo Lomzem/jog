@@ -28,7 +28,7 @@ pub(crate) struct Image {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ImagePart {
     pub(crate) file: PathBuf,
-    pub(crate) addr: Option<u64>,
+    pub(crate) addr: u64,
 }
 
 pub(crate) struct LoadedConfig {
@@ -38,7 +38,7 @@ pub(crate) struct LoadedConfig {
 
 pub(crate) struct FlashPart {
     pub(crate) file: PathBuf,
-    pub(crate) addr: Option<u32>,
+    pub(crate) addr: u32,
 }
 
 pub(crate) enum FlashPlan {
@@ -135,10 +135,11 @@ fn parse_config_file(path: &Path) -> AppResult<LoadedConfig> {
                     "an image part in '{name}' has no file"
                 )));
             }
-            validate_image_address(&part.file, part.addr, &format!("image '{name}'"))?;
-            if let Some(address) = part.addr {
-                normalize_flash_addr(address)?;
-            }
+            part.addr = u64::from(validate_image_address(
+                &part.file,
+                Some(part.addr),
+                &format!("image '{name}'"),
+            )?);
             if part.file.is_relative() {
                 part.file = base.join(&part.file);
             }
@@ -167,7 +168,7 @@ pub(crate) fn prepare_flash_parts(
             .map(|part| {
                 Ok(FlashPart {
                     file: part.file.clone(),
-                    addr: part.addr.map(normalize_flash_addr).transpose()?,
+                    addr: normalize_flash_addr(part.addr)?,
                 })
             })
             .collect::<AppResult<Vec<_>>>()?
@@ -183,7 +184,7 @@ pub(crate) fn prepare_flash_parts(
                 "'{target}' is not an existing file or named image ({names})"
             )));
         }
-        validate_image_address(&file, addr.map(u64::from), "image file")?;
+        let addr = validate_image_address(&file, addr.map(u64::from), "image file")?;
         vec![FlashPart { file, addr }]
     };
     for part in &mut parts {
@@ -225,15 +226,11 @@ fn validate_image_format(path: &Path) -> AppResult<()> {
     }
 }
 
-fn validate_image_address(path: &Path, addr: Option<u64>, context: &str) -> AppResult<()> {
+fn validate_image_address(path: &Path, addr: Option<u64>, context: &str) -> AppResult<u32> {
     validate_image_format(path)?;
-    if addr.is_none() {
-        Err(AppError::Usage(format!(
-            "raw .bin in {context} requires an address"
-        )))
-    } else {
-        Ok(())
-    }
+    normalize_flash_addr(
+        addr.ok_or_else(|| AppError::Usage(format!("raw .bin in {context} requires an address")))?,
+    )
 }
 
 pub(crate) fn plan_flash(parts: &[FlashPart], flash_end: u32) -> AppResult<FlashPlan> {
@@ -264,9 +261,7 @@ pub(crate) fn plan_flash(parts: &[FlashPart], flash_end: u32) -> AppResult<Flash
 }
 
 fn validate_part_range(part: &FlashPart, flash_end: u32) -> AppResult<Range<u32>> {
-    let address = part
-        .addr
-        .ok_or_else(|| AppError::Usage("raw .bin image requires an address".into()))?;
+    let address = part.addr;
     if !(FLASH_BASE..flash_end).contains(&address) {
         return Err(AppError::Usage(format!(
             "{address:#010x} is outside flash ({FLASH_BASE:#010x}-{flash_end:#010x})"
@@ -293,10 +288,7 @@ fn validate_part_range(part: &FlashPart, flash_end: u32) -> AppResult<Range<u32>
 
 pub(crate) fn write_part(session: &mut Session, part: &FlashPart, erase: bool) -> AppResult<()> {
     let path = tcl_literal(&path_string(&part.file)?);
-    let location = part
-        .addr
-        .map(|address| format!(" {address:#x} bin"))
-        .unwrap_or_default();
+    let location = format!(" {:#x} bin", part.addr);
     let label = part_label(part);
     println!("Programming {label}...");
     let erase = if erase { " erase" } else { "" };
@@ -312,10 +304,7 @@ pub(crate) fn write_part(session: &mut Session, part: &FlashPart, erase: bool) -
 
 pub(crate) fn verify_part(session: &mut Session, part: &FlashPart) -> AppResult<()> {
     let path = tcl_literal(&path_string(&part.file)?);
-    let address = part
-        .addr
-        .map(|address| format!(" {address:#x}"))
-        .unwrap_or_default();
+    let address = format!(" {:#x}", part.addr);
     println!("Verifying {}...", part.file.display());
     session
         .run(&format!("verify_image {path}{address}"))
@@ -325,10 +314,7 @@ pub(crate) fn verify_part(session: &mut Session, part: &FlashPart) -> AppResult<
 }
 
 fn part_label(part: &FlashPart) -> String {
-    match part.addr {
-        Some(address) => format!("{} @ {address:#010x}", part.file.display()),
-        None => part.file.display().to_string(),
-    }
+    format!("{} @ {:#010x}", part.file.display(), part.addr)
 }
 
 #[cfg(test)]
@@ -349,8 +335,9 @@ mod tests {
     #[test]
     fn enforces_image_address_rules() {
         assert!(validate_image_address(Path::new("x.bin"), None, "test").is_err());
-        assert!(
-            validate_image_address(Path::new("x.bin"), Some(FLASH_BASE.into()), "test").is_ok()
+        assert_eq!(
+            validate_image_address(Path::new("x.bin"), Some(0x10), "test").unwrap(),
+            FLASH_BASE + 0x10
         );
         assert!(
             validate_image_address(Path::new("x.elf"), Some(FLASH_BASE.into()), "test").is_err()
@@ -450,11 +437,11 @@ mod tests {
         let parts = [
             FlashPart {
                 file: first,
-                addr: Some(FLASH_BASE),
+                addr: FLASH_BASE,
             },
             FlashPart {
                 file: second,
-                addr: Some(FLASH_BASE + 8),
+                addr: FLASH_BASE + 8,
             },
         ];
         match plan_flash(&parts, FLASH_BASE + 1024).unwrap() {
@@ -468,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsafe_multi_part_flash_plans() {
+    fn rejects_overlapping_multi_part_flash_plans() {
         let dir = temp_dir();
         let first = dir.join("first.bin");
         let second = dir.join("second.bin");
@@ -477,19 +464,14 @@ mod tests {
         let overlap = [
             FlashPart {
                 file: first,
-                addr: Some(FLASH_BASE),
+                addr: FLASH_BASE,
             },
             FlashPart {
                 file: second,
-                addr: Some(FLASH_BASE + 4),
+                addr: FLASH_BASE + 4,
             },
         ];
         assert!(plan_flash(&overlap, FLASH_BASE + 1024).is_err());
-        let missing_address = [FlashPart {
-            file: overlap[1].file.clone(),
-            addr: None,
-        }];
-        assert!(plan_flash(&missing_address, FLASH_BASE + 1024).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -502,7 +484,7 @@ mod tests {
         fs::write(&past, [0; 5]).unwrap();
         let make = |file| FlashPart {
             file,
-            addr: Some(FLASH_BASE),
+            addr: FLASH_BASE,
         };
         assert!(validate_part_range(&make(exact), FLASH_BASE + 4).is_ok());
         assert!(validate_part_range(&make(past), FLASH_BASE + 4).is_err());
