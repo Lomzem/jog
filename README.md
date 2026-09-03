@@ -1,90 +1,80 @@
 # sam4e
 
-`sam4e` controls an ATSAM4E8C through an Atmel-ICE probe. It uses OpenOCD for
-target access. The default link is SWD at 400 kHz.
+`sam4e` controls an ATSAM4E8C through an Atmel-ICE probe. It uses OpenOCD.
+The default link is SWD at 400 kHz.
 
-## Requirements
+## Install
 
-Install OpenOCD. The tested version is 0.12. Make sure that `openocd` is on
-`PATH` and that its script tree contains `target/at91sam4XXX.cfg`.
-
-Use `sam4e.exe` on Windows x64. Install the Debian package on Ubuntu 24.04
-amd64.
-
-## Build release files
-
-On a Linux host, start Docker and run:
+Install OpenOCD 0.12. Make sure that `openocd` is on `PATH`. Run:
 
 ```text
-./build.sh
+openocd --version
 ```
 
-The script writes only these release files to `dist`:
-
-```text
-dist/sam4e-0.1.0-windows-x86_64.exe
-dist/sam4e_0.1.0_amd64.deb
-```
-
-The version comes from `Cargo.toml`. Install the Debian package with:
+On Ubuntu 24.04 amd64, install the Debian package:
 
 ```text
 sudo apt install ./dist/sam4e_0.1.0_amd64.deb
 ```
 
-The package installs `/usr/bin/sam4e` and requires OpenOCD.
+On Windows x64:
 
-## Start
+1. Install OpenOCD 0.12 and its Atmel-ICE USB driver.
+2. Run `openocd --version`.
+3. Rename `sam4e-0.1.0-windows-x86_64.exe` to `sam4e.exe`, or use the full file name.
+4. Add its directory to `PATH` if you want to use `sam4e` from all directories.
+5. Run `sam4e info`.
 
-Connect the Atmel-ICE and run:
+## First use
+
+Connect the probe and target. Then run:
 
 ```text
 sam4e info
 sam4e --help
 ```
 
-Use `--openocd PATH` if OpenOCD is not on `PATH`. Use `--serial SERIAL` when
-more than one Atmel-ICE is connected. Run `sam4e COMMAND --help` for command
-options.
+Use `--openocd PATH` if OpenOCD is not on `PATH`. Use `--serial SERIAL` if
+more than one Atmel-ICE is connected. Run `sam4e COMMAND --help` for option
+details.
 
-## Program flash
+## Common workflows
 
-A self-addressed file contains its load address:
+Program a self-addressed image:
 
 ```text
 sam4e flash build/app.elf
 ```
 
-A raw BIN file does not contain an address. You must supply one:
+Program a raw BIN file:
 
 ```text
 sam4e flash build/app.bin --addr 0x00400000
 ```
 
-For flash and erase commands, an address below `0x00400000` is a flash offset.
-Thus, `0x7a000` and `0x47a000` select the same flash address. The `read` command
-always uses an absolute address.
+By default, `flash` erases, writes, verifies, resets, and runs the target. Use
+`--no-run` to keep the target halted. Use `--no-verify` only if a different
+process verifies the image.
 
-By default, `flash` erases, writes, verifies, and resets. Do not use
-`--no-verify` unless another check verifies the image. Use `--no-run` when the
-target must remain halted.
+For `flash` and `erase`, an address below `0x00400000` is a flash offset. The
+values `0x7a000` and `0x47a000` select the same address. `read` always uses an
+absolute address.
 
-A multi-part named image must contain only raw BIN files. Each part must have
-an address, and the byte ranges must not overlap. `sam4e` erases all part ranges
-before it writes the first part. It verifies all parts after all writes.
+Read-only commands restore a running target to its entry state. A target that
+was halted stays halted.
 
 ## Named images
 
 The configuration file is optional. `sam4e` uses the first file in this list:
 
 1. The path from `--config`.
-2. `sam4e.toml` beside the executable.
-3. `$XDG_CONFIG_HOME/sam4e/sam4e.toml` when `XDG_CONFIG_HOME` is set.
-4. `$HOME/.config/sam4e/sam4e.toml` on Linux.
-5. `%APPDATA%\sam4e\sam4e.toml` on Windows.
+2. `sam4e.toml` in the current directory.
+3. `sam4e.toml` beside the executable.
+4. `$XDG_CONFIG_HOME/sam4e/sam4e.toml`.
+5. `$HOME/.config/sam4e/sam4e.toml` on Linux.
+6. `%APPDATA%\sam4e\sam4e.toml` on Windows.
 
-Relative image paths start from the directory that contains the configuration
-file.
+Relative image paths start in the configuration file directory.
 
 ```toml
 [images.application]
@@ -97,32 +87,47 @@ parts = [
 ]
 ```
 
-Use single quotes for Windows paths. TOML interprets backslashes in double
-quotes.
+A multi-part image must contain addressed BIN files. The ranges must not
+overlap. `sam4e` validates all parts, erases all ranges, writes all parts, and
+then verifies all parts. Use single quotes for Windows paths in TOML.
 
 ## Safety
 
-Confirm the address and image before you program or erase flash.
+Check the image and address before you change flash.
 
-`sam4e erase` asks for confirmation. Use `--yes` only in controlled automation.
+`sam4e erase` needs terminal confirmation. Use `--yes` only in controlled
+automation. The command fails before it starts OpenOCD if standard input is not
+a terminal and `--yes` is absent.
 
-Do not set GPNVM bit 0 unless you intend to disable JTAG and SWD. `sam4e`
-requires `--force` before it sets this bit. The ERASE pin restores debug access
-and erases all flash.
+GPNVM bit 0 disables JTAG and SWD. You must use `--force` to set it. The ERASE
+pin restores debug access and erases all flash.
 
-Do not use `raw` for normal work. It bypasses all address, image, and GPNVM
-safety checks.
+Do not use `raw` for normal work. It bypasses address, image, and GPNVM safety
+checks.
 
-Use SWD unless the target requires JTAG. The tested Atmel-ICE firmware corrupted
-large block transfers above approximately 500 kHz. Keep the 400 kHz default
-until a test proves that another speed is reliable on the applicable probe.
+Use SWD unless the target needs JTAG. The tested Atmel-ICE firmware corrupted
+large transfers above approximately 500 kHz. Keep the 400 kHz default until a
+test shows that a different speed is reliable with your probe.
 
-## Temporary Python version
+## Build
 
-The Python version remains in `legacy/python` for hardware checks. Run
-`legacy/python/sam4e` on Linux or `legacy\python\sam4e.cmd` on Windows. These
-launchers use the root `sam4e.toml` file.
+Start Docker on a Linux host. Then run:
 
-The Rust version intentionally rejects unsafe image combinations that the
-Python version accepted. Complete the hardware checks before you remove the
-Python version.
+```text
+./build.sh
+```
+
+The script runs the locked tests and creates:
+
+```text
+dist/sam4e-0.1.0-windows-x86_64.exe
+dist/sam4e_0.1.0_amd64.deb
+```
+
+The version comes from `Cargo.toml`.
+
+## Validation status
+
+Automated tests and package checks do not access hardware. Validation with an
+ATSAM4E8C, an Atmel-ICE, and OpenOCD 0.12 is pending. This includes entry-state
+restore, ROM boot, flash failure recovery, and probe speed checks.
