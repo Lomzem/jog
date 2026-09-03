@@ -289,7 +289,7 @@ fn validate_part_range(part: &FlashPart, flash_end: u32) -> AppResult<Range<u32>
 pub(crate) fn write_part(session: &mut Session, part: &FlashPart, erase: bool) -> AppResult<()> {
     let path = tcl_literal(&path_string(&part.file)?);
     let location = format!(" {:#x} bin", part.addr);
-    let label = part_label(part);
+    let label = format!("{} @ {:#010x}", part.file.display(), part.addr);
     println!("Programming {label}...");
     let erase = if erase { " erase" } else { "" };
     let output = session
@@ -311,10 +311,6 @@ pub(crate) fn verify_part(session: &mut Session, part: &FlashPart) -> AppResult<
         .map_err(AppError::flash_incomplete)?;
     println!("ok: verified {}", part.file.display());
     Ok(())
-}
-
-fn part_label(part: &FlashPart) -> String {
-    format!("{} @ {:#010x}", part.file.display(), part.addr)
 }
 
 #[cfg(test)]

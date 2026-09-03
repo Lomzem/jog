@@ -13,7 +13,7 @@ use crate::flash::{
 };
 use crate::openocd::{
     OpenOcdOptions, connect, connect_read_only, openocd_args, openocd_start_error, path_string,
-    tcl_literal, validate_tcl_value,
+    tcl_literal,
 };
 use crate::target::{
     ChipInfo, FLASH_BASE, SRAM_BASE, normalize_flash_addr, read_gpnvm, require_sam4e8c,
@@ -171,7 +171,13 @@ pub(crate) fn run() -> AppResult<()> {
 }
 
 fn execute(cli: &Cli) -> AppResult<()> {
-    validate_tcl_value(cli.serial.as_deref(), "serial number")?;
+    if cli
+        .serial
+        .as_ref()
+        .is_some_and(|serial| serial.contains('\0'))
+    {
+        return Err(AppError::Usage("serial number contains a null byte".into()));
+    }
     let options = OpenOcdOptions {
         executable: cli.openocd.clone(),
         transport: cli.transport.to_string(),

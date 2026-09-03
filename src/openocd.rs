@@ -112,10 +112,7 @@ impl Session {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| {
-                SessionError::fatal(format!(
-                    "{}",
-                    openocd_start_error(&options.executable, error)
-                ))
+                SessionError::fatal(openocd_start_error(&options.executable, error).to_string())
             })?;
         let log = Arc::new(Mutex::new(VecDeque::with_capacity(64)));
         if let Some(stdout) = child.stdout.take() {
@@ -394,14 +391,6 @@ pub(crate) fn openocd_start_error(executable: &Path, error: io::Error) -> AppErr
 
 fn free_port() -> io::Result<u16> {
     Ok(TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port())
-}
-
-pub(crate) fn validate_tcl_value(value: Option<&str>, name: &str) -> AppResult<()> {
-    if value.is_some_and(|value| value.contains('\0')) {
-        Err(AppError::Usage(format!("{name} contains a null byte")))
-    } else {
-        Ok(())
-    }
 }
 
 fn rpc_wrapper(tcl: &str) -> String {
