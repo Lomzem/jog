@@ -1,0 +1,10 @@
+[package]
+name = "sam4e"
+version = "0.1.0"
+edition = "2024"
+description = "Friendly ATSAM4E8C CLI for an Atmel-ICE"
+
+[dependencies]
+clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context", "suggestions"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1"
