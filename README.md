@@ -40,17 +40,15 @@ details.
 
 ## Common workflows
 
-Program a self-addressed image:
-
-```text
-sam4e flash build/app.elf
-```
-
 Program a raw BIN file:
 
 ```text
 sam4e flash build/app.bin --addr 0x00400000
 ```
+
+`sam4e` accepts raw BIN images because it can validate their complete range
+before erase. It rejects ELF, HEX, and S-record images until it can validate
+all load ranges.
 
 By default, `flash` erases, writes, verifies, resets, and runs the target. Use
 `--no-run` to keep the target halted. Use `--no-verify` only if a different
@@ -78,13 +76,20 @@ Relative image paths start in the configuration file directory.
 
 ```toml
 [images.application]
-parts = [{ file = 'build/app.elf' }]
+parts = [{ file = 'build/app.bin', addr = 0x00400000 }]
 
 [images.loader]
 parts = [
     { file = 'build/loader-1.bin', addr = 0x00400000 },
     { file = 'build/loader-2.bin', addr = 0x0047A000 },
 ]
+```
+
+List and program a named image:
+
+```text
+sam4e images
+sam4e flash application
 ```
 
 A multi-part image must contain addressed BIN files. The ranges must not
