@@ -13,6 +13,7 @@ RUN apt-get update \
         curl \
         gcc \
         gcc-mingw-w64-x86-64 \
+        libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
