@@ -29,6 +29,7 @@ COPY README.md ./
 ARG PACKAGE_VERSION
 RUN test -n "$PACKAGE_VERSION" \
     && cargo test --release --locked --target x86_64-unknown-linux-gnu \
+    && cargo build --release --locked --target x86_64-unknown-linux-gnu \
     && cargo test --release --locked --target x86_64-pc-windows-gnu --no-run \
     && cargo build --release --locked --target x86_64-pc-windows-gnu \
     && install -Dm0755 target/x86_64-unknown-linux-gnu/release/sam4e /package/usr/bin/sam4e \
