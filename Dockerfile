@@ -33,25 +33,25 @@ RUN test -n "$PACKAGE_VERSION" \
     && cargo build --release --locked --target x86_64-unknown-linux-gnu \
     && cargo test --release --locked --target x86_64-pc-windows-gnu --no-run \
     && cargo build --release --locked --target x86_64-pc-windows-gnu \
-    && install -Dm0755 target/x86_64-unknown-linux-gnu/release/sam4e /package/usr/bin/sam4e \
-    && strip /package/usr/bin/sam4e \
-    && /package/usr/bin/sam4e --version \
-    && install -Dm0644 README.md /package/usr/share/doc/sam4e/README.md \
-    && install -Dm0755 target/x86_64-pc-windows-gnu/release/sam4e.exe "/out/sam4e-${PACKAGE_VERSION}-windows-x86_64.exe" \
-    && x86_64-w64-mingw32-strip "/out/sam4e-${PACKAGE_VERSION}-windows-x86_64.exe" \
-    && x86_64-w64-mingw32-objdump -f "/out/sam4e-${PACKAGE_VERSION}-windows-x86_64.exe" \
+    && install -Dm0755 target/x86_64-unknown-linux-gnu/release/jog /package/usr/bin/jog \
+    && strip /package/usr/bin/jog \
+    && /package/usr/bin/jog --version \
+    && install -Dm0644 README.md /package/usr/share/doc/jog/README.md \
+    && install -Dm0755 target/x86_64-pc-windows-gnu/release/jog.exe "/out/jog-${PACKAGE_VERSION}-windows-x86_64.exe" \
+    && x86_64-w64-mingw32-strip "/out/jog-${PACKAGE_VERSION}-windows-x86_64.exe" \
+    && x86_64-w64-mingw32-objdump -f "/out/jog-${PACKAGE_VERSION}-windows-x86_64.exe" \
     && mkdir -p /package/DEBIAN \
     && printf '%s\n' \
-        'Package: sam4e' \
+        'Package: jog' \
         "Version: $PACKAGE_VERSION" \
         'Section: devel' \
         'Priority: optional' \
         'Architecture: amd64' \
-        'Maintainer: sam4e maintainers <maintainers@example.invalid>' \
+        'Maintainer: jog maintainers <maintainers@example.invalid>' \
         'Depends: openocd' \
         'Description: ATSAM4E8C CLI for an Atmel-ICE' \
         > /package/DEBIAN/control \
-    && dpkg-deb --build --root-owner-group /package "/out/sam4e_${PACKAGE_VERSION}_amd64.deb"
+    && dpkg-deb --build --root-owner-group /package "/out/jog_${PACKAGE_VERSION}_amd64.deb"
 
 FROM scratch AS artifacts
 COPY --from=build /out/ /

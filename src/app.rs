@@ -22,7 +22,7 @@ use crate::{AppError, AppResult};
 
 #[derive(Parser)]
 #[command(
-    name = "sam4e",
+    name = "jog",
     version,
     about = "Control an ATSAM4E8C through an Atmel-ICE",
     arg_required_else_help = true
@@ -131,7 +131,7 @@ enum Commands {
         #[arg(short = 'p', long, default_value_t = 3333, value_parser = clap::value_parser!(u16).range(1..))]
         port: u16,
     },
-    /// Advanced: run raw OpenOCD Tcl without sam4e safety checks
+    /// Advanced: run raw OpenOCD Tcl without jog safety checks
     Raw {
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
@@ -207,7 +207,7 @@ fn command_info(options: &OpenOcdOptions) -> AppResult<()> {
     let bits = read_gpnvm(&mut session)?;
     let state = session.entry_state();
 
-    println!("SAM4E");
+    println!("jog");
     println!("  Part          SAM4E8C");
     println!(
         "  CHIPID        CIDR={:#010x} EXID={:#010x}",
@@ -423,7 +423,7 @@ fn gpnvm_write(options: &OpenOcdOptions, bit: u8, value: u8, force: bool) -> App
     );
     print_gpnvm(after);
     if bit == 1 {
-        println!("The change takes effect after reset. Run: sam4e reset");
+        println!("The change takes effect after reset. Run: jog reset");
     }
     Ok(())
 }
@@ -586,7 +586,7 @@ fn command_gdb(options: &OpenOcdOptions, port: u16) -> AppResult<()> {
 }
 
 fn command_raw(options: &OpenOcdOptions, command: &[String]) -> AppResult<()> {
-    eprintln!("warning: raw bypasses all sam4e safety checks");
+    eprintln!("warning: raw bypasses all jog safety checks");
     let mut session = connect(options)?;
     let output = session.run(&command.join(" "))?;
     if !output.is_empty() {
@@ -770,8 +770,8 @@ mod tests {
     #[test]
     fn boot_uses_canonical_values_and_compatible_aliases() {
         for mode in ["flash", "rom", "app", "samba"] {
-            assert!(Cli::try_parse_from(["sam4e", "boot", mode]).is_ok());
+            assert!(Cli::try_parse_from(["jog", "boot", mode]).is_ok());
         }
-        assert!(Cli::try_parse_from(["sam4e", "boot", "invalid"]).is_err());
+        assert!(Cli::try_parse_from(["jog", "boot", "invalid"]).is_err());
     }
 }

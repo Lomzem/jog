@@ -1,6 +1,6 @@
-# sam4e
+# jog
 
-`sam4e` controls an ATSAM4E8C through an Atmel-ICE probe. It uses OpenOCD.
+`jog` controls an ATSAM4E8C through an Atmel-ICE probe. It uses OpenOCD.
 The default link is SWD at 400 kHz.
 
 ## Install
@@ -18,7 +18,7 @@ build with the [upstream serial buffer fix](https://github.com/openocd-org/openo
 The local hardware tests use this fixed build:
 
 ```text
-target/release/sam4e --openocd backups/hardware-test/openocd-fixed/local/bin/openocd --transport jtag info
+target/release/jog --openocd backups/hardware-test/openocd-fixed/local/bin/openocd --transport jtag info
 ```
 
 This local OpenOCD build is in the ignored test directory. It is not part of
@@ -27,31 +27,31 @@ the package. On another computer, use the path and probe serial for that compute
 On Ubuntu 24.04 amd64, install the Debian package:
 
 ```text
-sudo apt install ./dist/sam4e_0.1.0_amd64.deb
+sudo apt install ./dist/jog_0.1.0_amd64.deb
 ```
 
 On Windows x64:
 
 1. Install OpenOCD 0.12 and its Atmel-ICE USB driver.
 2. Run `openocd --version`.
-3. Rename `sam4e-0.1.0-windows-x86_64.exe` to `sam4e.exe`, or use the full file name.
-4. Add its directory to `PATH` if you want to use `sam4e` from all directories.
-5. Run `sam4e info`.
+3. Rename `jog-0.1.0-windows-x86_64.exe` to `jog.exe`, or use the full file name.
+4. Add its directory to `PATH` if you want to use `jog` from all directories.
+5. Run `jog info`.
 
 ## First use
 
 Connect the probe and target. Then run:
 
 ```text
-sam4e info
-sam4e --help
+jog info
+jog --help
 
 # For a JTAG connection:
-sam4e --transport jtag info
+jog --transport jtag info
 ```
 
 Use `--openocd PATH` if OpenOCD is not on `PATH`. Use `--serial SERIAL` if
-more than one Atmel-ICE is connected. Run `sam4e COMMAND --help` for option
+more than one Atmel-ICE is connected. Run `jog COMMAND --help` for option
 details.
 
 ## Common workflows
@@ -59,16 +59,16 @@ details.
 Program a raw BIN file:
 
 ```text
-sam4e flash build/app.bin --addr 0x00400000
+jog flash build/app.bin --addr 0x00400000
 ```
 
 Program an ELF file through JTAG and keep the target halted:
 
 ```text
-sam4e --transport jtag flash build/bootloader.elf --no-run
+jog --transport jtag flash build/bootloader.elf --no-run
 ```
 
-`sam4e` accepts raw BIN files and little-endian ARM ELF32 executable files
+`jog` accepts raw BIN files and little-endian ARM ELF32 executable files
 with `.elf` or `.axf` extensions. BIN files need `--addr`. ELF files use their
 physical load addresses; do not give them `--addr`. The tool checks all load
 ranges before erase. It writes the initial values for RAM to their flash load
@@ -79,7 +79,7 @@ By default, `flash` erases, writes, verifies, and resets the target to run.
 It does not change the boot source. To select flash boot and reset, run:
 
 ```text
-sam4e --transport jtag boot flash
+jog --transport jtag boot flash
 ```
 
 Use `--no-run` with `flash` to keep the target halted. Use `--no-verify` only
@@ -98,14 +98,14 @@ OpenOCD reports repeated debug-port stalls.
 
 ## Named images
 
-The configuration file is optional. `sam4e` uses the first file in this list:
+The configuration file is optional. `jog` uses the first file in this list:
 
 1. The path from `--config`.
-2. `sam4e.toml` in the current directory.
-3. `sam4e.toml` beside the executable.
-4. `$XDG_CONFIG_HOME/sam4e/sam4e.toml`.
-5. `$HOME/.config/sam4e/sam4e.toml` on Linux.
-6. `%APPDATA%\sam4e\sam4e.toml` on Windows.
+2. `jog.toml` in the current directory.
+3. `jog.toml` beside the executable.
+4. `$XDG_CONFIG_HOME/jog/jog.toml`.
+5. `$HOME/.config/jog/jog.toml` on Linux.
+6. `%APPDATA%\jog\jog.toml` on Windows.
 
 Relative image paths start in the configuration file directory. This example
 uses generic file names. Set each path to the local image file.
@@ -127,13 +127,13 @@ parts = [{ file = 'build/bootloader.elf' }]
 List and program a named image:
 
 ```text
-sam4e images
-sam4e flash application
-sam4e --transport jtag flash bootloader --no-run
+jog images
+jog flash application
+jog --transport jtag flash bootloader --no-run
 ```
 
 A named image can contain BIN files with addresses and ELF files without
-addresses. The load ranges must not overlap. `sam4e` checks all parts, erases
+addresses. The load ranges must not overlap. `jog` checks all parts, erases
 all ranges, writes all parts, and then verifies all parts. Use single quotes
 for Windows paths in TOML.
 
@@ -148,7 +148,7 @@ written after the erase operations.
 
 Check the image and address before you change flash.
 
-`sam4e erase` needs terminal confirmation. Use `--yes` only in controlled
+`jog erase` needs terminal confirmation. Use `--yes` only in controlled
 automation. The command fails before it starts OpenOCD if standard input is not
 a terminal and `--yes` is absent.
 
@@ -172,8 +172,8 @@ Start Docker on a Linux host. Then run:
 The script runs the locked tests and creates:
 
 ```text
-dist/sam4e-0.1.0-windows-x86_64.exe
-dist/sam4e_0.1.0_amd64.deb
+dist/jog-0.1.0-windows-x86_64.exe
+dist/jog_0.1.0_amd64.deb
 ```
 
 The version comes from `Cargo.toml`.

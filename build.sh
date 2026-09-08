@@ -32,8 +32,8 @@ DOCKER_BUILDKIT=1 docker build \
     --output "type=local,dest=${DIST_DIR}" \
     "${ROOT_DIR}"
 
-windows="${DIST_DIR}/sam4e-${version}-windows-x86_64.exe"
-deb="${DIST_DIR}/sam4e_${version}_amd64.deb"
+windows="${DIST_DIR}/jog-${version}-windows-x86_64.exe"
+deb="${DIST_DIR}/jog_${version}_amd64.deb"
 [[ -f "${windows}" && -f "${deb}" ]] || {
     echo "error: Docker did not produce the expected release artifacts" >&2
     exit 1

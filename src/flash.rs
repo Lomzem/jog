@@ -49,7 +49,7 @@ pub(crate) enum FlashPlan {
 
 pub(crate) fn load_config(explicit: Option<&Path>) -> AppResult<LoadedConfig> {
     let executable = env::current_exe()
-        .map_err(|error| AppError::Usage(format!("cannot locate the sam4e executable: {error}")))?;
+        .map_err(|error| AppError::Usage(format!("cannot locate the jog executable: {error}")))?;
     let current_dir = env::current_dir().map_err(|error| {
         AppError::Usage(format!("cannot locate the current directory: {error}"))
     })?;
@@ -89,23 +89,23 @@ fn config_candidates(
     if let Some(path) = explicit {
         return vec![path.to_owned()];
     }
-    let mut paths = vec![current_dir.join("sam4e.toml")];
+    let mut paths = vec![current_dir.join("jog.toml")];
     if let Some(parent) = executable.parent() {
-        paths.push(parent.join("sam4e.toml"));
+        paths.push(parent.join("jog.toml"));
     }
     if let Some(xdg) = xdg.filter(|value| !value.is_empty()) {
-        paths.push(PathBuf::from(xdg).join("sam4e").join("sam4e.toml"));
+        paths.push(PathBuf::from(xdg).join("jog").join("jog.toml"));
     }
     if windows {
         if let Some(appdata) = appdata.filter(|value| !value.is_empty()) {
-            paths.push(PathBuf::from(appdata).join("sam4e").join("sam4e.toml"));
+            paths.push(PathBuf::from(appdata).join("jog").join("jog.toml"));
         }
     } else if let Some(home) = home.filter(|value| !value.is_empty()) {
         paths.push(
             PathBuf::from(home)
                 .join(".config")
-                .join("sam4e")
-                .join("sam4e.toml"),
+                .join("jog")
+                .join("jog.toml"),
         );
     }
     paths.dedup();
@@ -158,7 +158,7 @@ pub(crate) fn prepare_flash_parts(
     let mut parts = if let Some(image) = config.images.get(target) {
         if addr.is_some() {
             return Err(AppError::Usage(
-                "--addr does not apply to a named image; edit sam4e.toml instead".into(),
+                "--addr does not apply to a named image; edit jog.toml instead".into(),
             ));
         }
         image
@@ -433,7 +433,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = env::temp_dir().join(format!("sam4e-test-{}-{unique}", std::process::id()));
+        let path = env::temp_dir().join(format!("jog-test-{}-{unique}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
     }
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn accepts_named_elf_without_address() {
         let dir = temp_dir();
-        let path = dir.join("sam4e.toml");
+        let path = dir.join("jog.toml");
         fs::write(&path, "[images.app]\nparts = [{ file = 'app.elf' }]\n").unwrap();
         let config = parse_config_file(&path).unwrap();
         assert!(config.images["app"].parts[0].addr.is_none());
@@ -609,7 +609,7 @@ mod tests {
         let paths = config_candidates(
             None,
             Path::new("/project"),
-            Path::new("/opt/sam4e/sam4e"),
+            Path::new("/opt/jog/jog"),
             Some(OsString::from("/xdg")),
             Some(OsString::from("/home/user")),
             Some(OsString::from("C:\\AppData")),
@@ -618,16 +618,16 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                PathBuf::from("/project/sam4e.toml"),
-                PathBuf::from("/opt/sam4e/sam4e.toml"),
-                PathBuf::from("/xdg/sam4e/sam4e.toml"),
-                PathBuf::from("/home/user/.config/sam4e/sam4e.toml")
+                PathBuf::from("/project/jog.toml"),
+                PathBuf::from("/opt/jog/jog.toml"),
+                PathBuf::from("/xdg/jog/jog.toml"),
+                PathBuf::from("/home/user/.config/jog/jog.toml")
             ]
         );
         let explicit = config_candidates(
             Some(Path::new("chosen.toml")),
             Path::new("/project"),
-            Path::new("/opt/sam4e/sam4e"),
+            Path::new("/opt/jog/jog"),
             None,
             None,
             None,
@@ -641,22 +641,22 @@ mod tests {
         let paths = config_candidates(
             None,
             Path::new("/project"),
-            Path::new("/portable/sam4e.exe"),
+            Path::new("/portable/jog.exe"),
             Some(OsString::from("/xdg")),
             Some(OsString::from("C:\\Users\\u")),
             Some(OsString::from("C:\\Users\\u\\AppData\\Roaming")),
             true,
         );
-        assert_eq!(paths[0], PathBuf::from("/project/sam4e.toml"));
-        assert_eq!(paths[1], PathBuf::from("/portable/sam4e.toml"));
-        assert_eq!(paths[2], PathBuf::from("/xdg/sam4e/sam4e.toml"));
-        assert!(paths[3].ends_with(Path::new("sam4e/sam4e.toml")));
+        assert_eq!(paths[0], PathBuf::from("/project/jog.toml"));
+        assert_eq!(paths[1], PathBuf::from("/portable/jog.toml"));
+        assert_eq!(paths[2], PathBuf::from("/xdg/jog/jog.toml"));
+        assert!(paths[3].ends_with(Path::new("jog/jog.toml")));
     }
 
     #[test]
     fn parses_config_and_resolves_relative_files() {
         let dir = temp_dir();
-        let path = dir.join("sam4e.toml");
+        let path = dir.join("jog.toml");
         fs::write(
             &path,
             "[images.app]\nparts = [{ file = 'build/app.bin', addr = 0x400000 }]\n",
@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn rejects_invalid_config_shape() {
         let dir = temp_dir();
-        let path = dir.join("sam4e.toml");
+        let path = dir.join("jog.toml");
         fs::write(&path, "[images.app]\nparts = []\n").unwrap();
         assert!(parse_config_file(&path).is_err());
         fs::write(

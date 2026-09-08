@@ -10,17 +10,17 @@ struct Workspace(PathBuf);
 impl Workspace {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "sam4e-commands-{}-{}",
+            "jog-commands-{}-{}",
             std::process::id(),
             NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&path).unwrap();
-        fs::write(path.join("sam4e.toml"), "[images]\n").unwrap();
+        fs::write(path.join("jog.toml"), "[images]\n").unwrap();
         Self(path)
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_sam4e"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_jog"));
         command
             .current_dir(&self.0)
             .arg("--openocd")
@@ -82,7 +82,7 @@ fn help_and_version_do_not_need_openocd() {
     for args in [["--help"], ["--version"]] {
         let output = workspace.run(&args);
         assert!(output.status.success());
-        assert!(String::from_utf8_lossy(&output.stdout).contains("sam4e"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("jog"));
     }
 }
 
@@ -127,7 +127,7 @@ fn rejects_missing_explicit_config_and_unknown_fields() {
         2,
         "configuration file does not exist",
     );
-    fs::write(workspace.0.join("sam4e.toml"), "imagse = {}\n").unwrap();
+    fs::write(workspace.0.join("jog.toml"), "imagse = {}\n").unwrap();
     assert_error(workspace.run(&["images"]), 2, "unknown field");
 }
 
@@ -149,7 +149,7 @@ fn failed_openocd_startup_reports_log_and_stops_after_three_attempts() {
         "#!/bin/sh\nprintf 'attempt\\n' >> attempts.log\necho 'test probe startup failed' >&2\nexit 7\n",
     ).unwrap();
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o700)).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_sam4e"))
+    let output = Command::new(env!("CARGO_BIN_EXE_jog"))
         .current_dir(&workspace.0)
         .arg("--openocd")
         .arg(fake)

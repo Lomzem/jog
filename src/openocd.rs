@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::{AppError, AppResult};
 
 const RPC_EOM: u8 = 0x1a;
-const MARK: &str = "---SAM4E-OUT---";
+const MARK: &str = "---JOG-OUT---";
 
 pub(crate) struct OpenOcdOptions {
     pub(crate) executable: PathBuf,

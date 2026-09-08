@@ -6,7 +6,7 @@ and 128 KiB of SRAM.
 
 ## Software
 
-- `sam4e`: local source and Linux release build.
+- `jog`: local source and Linux release build.
 - Installed OpenOCD: `0.12.0-01004-g9ea7f3d64-dirty`.
 - Fixed OpenOCD: `0.12.0+dev-gbedefa2`, built in
   `backups/hardware-test/openocd-fixed/local/`.
