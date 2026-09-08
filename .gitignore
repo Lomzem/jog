@@ -1,6 +1,7 @@
 target/
 dist/
 backups/
+test-elf-do-not-commit/
 
 .vscode/
 .idea/

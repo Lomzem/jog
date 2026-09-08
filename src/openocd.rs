@@ -69,7 +69,14 @@ fn connect_with_policy(options: &OpenOcdOptions, restore_entry_state: bool) -> A
     let mut last = None;
     for attempt in 1..=3 {
         match Session::start(options).and_then(|mut session| {
+            // The first background poll may not have run when Tcl connects.
+            session.run_inner("poll")?;
             let state = session.value_inner("$_TARGETNAME curstate")?;
+            if state != "running" && state != "halted" {
+                return Err(SessionError::retryable(format!(
+                    "cannot determine target entry state: {state}"
+                )));
+            }
             session.resume_on_drop = restore_entry_state && state == "running";
             session.entry_state = state;
             if let Err(error) = session.run_inner("halt") {
@@ -81,16 +88,17 @@ fn connect_with_policy(options: &OpenOcdOptions, restore_entry_state: bool) -> A
             Ok(session) => return Ok(session),
             Err(error) => {
                 let retryable = error.retryable;
+                let delay = retry_delay(&error.message, attempt);
                 last = Some(error.message);
                 if !retryable || attempt == 3 {
                     break;
                 }
-                // ROM/SAM-BA can drop the first CMSIS-DAP transaction.
                 eprintln!(
-                    "retrying: link attempt {attempt} failed; reconnecting ({}/3)",
+                    "retrying: link attempt {attempt} failed; reconnecting in {} s ({}/3)",
+                    delay.as_secs_f32(),
                     attempt + 1
                 );
-                thread::sleep(Duration::from_millis(500));
+                thread::sleep(delay);
             }
         }
     }
@@ -98,6 +106,24 @@ fn connect_with_policy(options: &OpenOcdOptions, restore_entry_state: bool) -> A
         "cannot reach the target: {}\nCheck target power, cables, --serial, and the 400 kHz default. Use --verbose for the OpenOCD log.",
         last.unwrap_or_else(|| "unknown OpenOCD failure".into())
     )))
+}
+
+fn retry_delay(message: &str, attempt: u32) -> Duration {
+    // The ROM can stall debug access for about 18 seconds after reset on
+    // the tested target. Keep the first retry quick for a dropped packet.
+    if attempt >= 2
+        && [
+            "stalled AP operation",
+            "DAP transaction stalled",
+            "WAIT recovery",
+        ]
+        .iter()
+        .any(|detail| message.contains(detail))
+    {
+        Duration::from_secs(20)
+    } else {
+        Duration::from_millis(500)
+    }
 }
 
 impl Session {
@@ -251,14 +277,36 @@ impl Session {
     }
 
     pub(crate) fn read32(&mut self, address: u32, count: usize) -> AppResult<Vec<u32>> {
-        self.value(&format!("read_memory {address:#x} 32 {count}"))?
+        self.read_memory(address, 32, count)
+    }
+
+    pub(crate) fn read8(&mut self, address: u32, count: usize) -> AppResult<Vec<u8>> {
+        self.read_memory(address, 8, count)?
+            .into_iter()
+            .map(|word| {
+                u8::try_from(word)
+                    .map_err(|_| AppError::Runtime(format!("invalid byte from OpenOCD: {word}")))
+            })
+            .collect()
+    }
+
+    fn read_memory(&mut self, address: u32, width: u8, count: usize) -> AppResult<Vec<u32>> {
+        let words = self
+            .value(&format!("read_memory {address:#x} {width} {count}"))?
             .split_whitespace()
             .map(|word| {
                 let digits = word.strip_prefix("0x").unwrap_or(word);
                 u32::from_str_radix(digits, if word.starts_with("0x") { 16 } else { 10 })
                     .map_err(|_| AppError::Runtime(format!("invalid word from OpenOCD: {word}")))
             })
-            .collect()
+            .collect::<AppResult<Vec<_>>>()?;
+        if words.len() != count {
+            return Err(AppError::Runtime(format!(
+                "incomplete memory data from OpenOCD: expected {count} values, got {}",
+                words.len()
+            )));
+        }
+        Ok(words)
     }
 
     pub(crate) fn write32(&mut self, address: u32, words: &[u32]) -> AppResult<()> {
@@ -350,7 +398,8 @@ pub(crate) fn openocd_args(
 ) -> Vec<OsString> {
     let mut commands = vec![
         "adapter driver cmsis-dap".to_owned(),
-        "cmsis-dap vid_pid 0x03eb 0x2141".to_owned(),
+        // OpenOCD releases use different names for USB adapter selection.
+        "if {[catch {adapter usb vid_pid 0x03eb 0x2141}]} { if {[catch {cmsis-dap vid_pid 0x03eb 0x2141}]} { cmsis_dap_vid_pid 0x03eb 0x2141 } }".to_owned(),
     ];
     if let Some(serial) = &options.serial {
         commands.push(format!("adapter serial {}", tcl_literal(serial)));
@@ -432,6 +481,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn allows_rom_startup_only_after_repeated_debug_stalls() {
+        assert_eq!(
+            retry_delay("stalled AP operation", 1),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            retry_delay("stalled AP operation", 2),
+            Duration::from_secs(20)
+        );
+        assert_eq!(
+            retry_delay("Timeout during WAIT recovery", 2),
+            Duration::from_secs(20)
+        );
+        assert_eq!(
+            retry_delay("probe not found", 2),
+            Duration::from_millis(500)
+        );
+    }
+
+    #[test]
     fn quotes_tcl_literals_without_rpc_end_bytes() {
         assert_eq!(
             tcl_literal("C:\\a $b [x] \"q\"\r\n\t"),
@@ -480,6 +549,67 @@ mod tests {
             request.push(byte[0]);
         }
         request
+    }
+
+    fn memory_session(
+        expected_request: &'static str,
+        response: &'static str,
+    ) -> (Session, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let worker = thread::spawn(move || {
+            let request = read_request(&mut server);
+            assert_eq!(&request[..request.len() - 1], expected_request.as_bytes());
+            server.write_all(response.as_bytes()).unwrap();
+            server.write_all(&[RPC_EOM]).unwrap();
+        });
+        let session = Session {
+            child: test_child(),
+            socket: Some(client),
+            log: Arc::new(Mutex::new(VecDeque::new())),
+            entry_state: "halted".into(),
+            resume_on_drop: false,
+        };
+        (session, worker)
+    }
+
+    #[test]
+    fn reads_exact_bytes_at_an_unaligned_address() {
+        let (mut session, worker) = memory_session("read_memory 0x400001 8 3", "0x00 127 0xff");
+        let bytes = session.read8(0x400001, 3).unwrap();
+        worker.join().unwrap();
+        assert_eq!(bytes, [0, 127, 255]);
+    }
+
+    #[test]
+    fn rejects_incomplete_byte_data() {
+        let (mut session, worker) = memory_session("read_memory 0x400001 8 3", "0x01 2");
+        let error = session.read8(0x400001, 3).unwrap_err();
+        worker.join().unwrap();
+        assert!(error.to_string().contains("expected 3 values, got 2"));
+    }
+
+    #[test]
+    fn rejects_values_outside_a_byte() {
+        let (mut session, worker) = memory_session("read_memory 0x400001 8 1", "0x100");
+        let error = session.read8(0x400001, 1).unwrap_err();
+        worker.join().unwrap();
+        assert!(error.to_string().contains("invalid byte from OpenOCD: 256"));
+    }
+
+    #[test]
+    fn rejects_incomplete_word_data() {
+        let (mut session, worker) = memory_session("read_memory 0x400000 32 2", "0x12345678");
+        let error = session.read32(0x400000, 2).unwrap_err();
+        worker.join().unwrap();
+        assert!(error.to_string().contains("expected 2 values, got 1"));
     }
 
     #[cfg(unix)]

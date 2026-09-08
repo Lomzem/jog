@@ -124,17 +124,34 @@ fn parse_descriptor(words: &[u32]) -> AppResult<FlashDescriptor> {
     let lock_index = 4_usize
         .checked_add(planes)
         .ok_or_else(|| AppError::Runtime("invalid EEFC flash descriptor".into()))?;
-    if planes == 0 || lock_index + 1 >= words.len() {
+    if planes == 0 || planes > 8 || lock_index + 1 >= words.len() {
         return Err(AppError::Runtime("invalid EEFC flash descriptor".into()));
     }
-    if words[2] == 0 {
-        return Err(AppError::Runtime("EEFC reports a zero page size".into()));
+    let size = words[1];
+    let page_size = words[2];
+    let lock_regions = words[lock_index];
+    let lock_size = words[lock_index + 1];
+    let plane_bytes: u64 = words[4..lock_index]
+        .iter()
+        .map(|size| u64::from(*size))
+        .sum();
+    if size == 0
+        || FLASH_BASE.checked_add(size).is_none()
+        || page_size == 0
+        || !size.is_multiple_of(page_size)
+        || lock_regions == 0
+        || lock_size == 0
+        || !lock_size.is_multiple_of(page_size)
+        || u64::from(lock_regions) * u64::from(lock_size) != u64::from(size)
+        || plane_bytes != u64::from(size)
+    {
+        return Err(AppError::Runtime("invalid EEFC flash geometry".into()));
     }
     Ok(FlashDescriptor {
-        size: words[1],
-        page_size: words[2],
-        lock_regions: words[lock_index],
-        lock_size: words[lock_index + 1],
+        size,
+        page_size,
+        lock_regions,
+        lock_size,
     })
 }
 
@@ -174,6 +191,25 @@ mod tests {
             }
         );
         assert!(parse_descriptor(&[1, 2, 0, 1, 2, 3, 4]).is_err());
+    }
+
+    #[test]
+    fn rejects_inconsistent_flash_geometry() {
+        let valid = [1, 512 * 1024, 512, 1, 512 * 1024, 64, 8192];
+        assert!(parse_descriptor(&valid).is_ok());
+        for (index, value) in [
+            (1, 0),
+            (1, u32::MAX),
+            (2, 0),
+            (3, 0),
+            (4, 1),
+            (5, 0),
+            (6, 1),
+        ] {
+            let mut invalid = valid;
+            invalid[index] = value;
+            assert!(parse_descriptor(&invalid).is_err(), "index {index}");
+        }
     }
 
     #[test]

@@ -23,6 +23,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 WORKDIR /work
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY tests ./tests
 RUN cargo fetch --locked
 
 COPY README.md ./

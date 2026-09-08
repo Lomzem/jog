@@ -76,9 +76,9 @@ enum Commands {
     Info,
     /// List named images
     Images,
-    /// Program a named image or raw BIN file
+    /// Program a named image, BIN file, or ELF/AXF file
     Flash {
-        #[arg(help = "Image name or raw .bin file")]
+        #[arg(help = "Image name, .bin file, or .elf/.axf file")]
         target: String,
         #[arg(short = 'a', long, help = "Flash address or offset for a raw .bin")]
         addr: Option<String>,
@@ -263,7 +263,10 @@ fn command_images(cli: &Cli) -> AppResult<()> {
                 .unwrap_or_default()
         );
         for part in image.parts {
-            let location = format!("{:#010x}", normalize_flash_addr(part.addr)?);
+            let location = match part.addr {
+                Some(addr) => format!("{:#010x}", normalize_flash_addr(addr)?),
+                None => "ELF addresses".to_owned(),
+            };
             let missing = if part.file.is_file() {
                 ""
             } else {
@@ -488,6 +491,7 @@ fn command_read(
 ) -> AppResult<()> {
     let address = parse_absolute_addr(addr)?;
     let length = parse_positive_usize(length, "length")?;
+    validate_read_range(address, length)?;
     let output = out.map(absolute_path).transpose()?;
     if let Some(path) = &output {
         path_string(path)?;
@@ -504,34 +508,34 @@ fn command_read(
         return session.restore_entry_state();
     }
 
-    let words = session.read32(address, length.saturating_add(3) / 4)?;
-    let mut data = Vec::with_capacity(words.len() * 4);
-    for word in words {
-        data.extend_from_slice(&word.to_le_bytes());
-    }
-    data.truncate(length);
-    for (line, bytes) in data.chunks(16).enumerate() {
-        let hex = bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let text: String = bytes
-            .iter()
-            .map(|byte| {
-                if (32..127).contains(byte) {
-                    char::from(*byte)
-                } else {
-                    '.'
-                }
-            })
-            .collect();
-        println!(
-            "{:08x}  {:<47}  |{}|",
-            address as usize + line * 16,
-            hex,
-            text
-        );
+    // Keep each RPC response small and read exactly the requested bytes.
+    for offset in (0..length).step_by(1024) {
+        let count = (length - offset).min(1024);
+        let chunk_address = (u64::from(address) + offset as u64) as u32;
+        let data = session.read8(chunk_address, count)?;
+        for (line, bytes) in data.chunks(16).enumerate() {
+            let hex = bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let text: String = bytes
+                .iter()
+                .map(|byte| {
+                    if (32..127).contains(byte) {
+                        char::from(*byte)
+                    } else {
+                        '.'
+                    }
+                })
+                .collect();
+            println!(
+                "{:08x}  {:<47}  |{}|",
+                u64::from(chunk_address) + (line * 16) as u64,
+                hex,
+                text
+            );
+        }
     }
     session.restore_entry_state()
 }
@@ -666,6 +670,16 @@ fn parse_positive_usize(text: &str, name: &str) -> AppResult<usize> {
     usize::try_from(value).map_err(|_| AppError::Usage(format!("{name} is too large")))
 }
 
+fn validate_read_range(address: u32, length: usize) -> AppResult<()> {
+    let available = (1_u64 << 32) - u64::from(address);
+    if length == 0 || length as u128 > u128::from(available) {
+        return Err(AppError::Usage(
+            "read range must contain bytes within the 32-bit address space".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn absolute_path(path: &Path) -> AppResult<PathBuf> {
     if path.is_absolute() {
         Ok(path.to_owned())
@@ -735,6 +749,14 @@ mod tests {
     fn keeps_read_addresses_absolute() {
         assert_eq!(parse_absolute_addr("0x00100000").unwrap(), 0x00100000);
         assert!(parse_absolute_addr("8G").is_err());
+    }
+
+    #[test]
+    fn read_range_accepts_unaligned_bytes_but_rejects_address_overflow() {
+        assert!(validate_read_range(0x400001, 3).is_ok());
+        assert!(validate_read_range(u32::MAX, 1).is_ok());
+        assert!(validate_read_range(u32::MAX, 2).is_err());
+        assert!(validate_read_range(0, 0).is_err());
     }
 
     #[test]
