@@ -9,8 +9,8 @@ use std::thread;
 use std::time::Duration;
 
 use crate::flash::{
-    FlashPlan, config_directory, load_config, plan_flash, prepare_flash_parts, verify_part,
-    write_part,
+    FlashPlan, config_directory, init_config, load_config, plan_flash, prepare_flash_parts,
+    verify_part, write_part,
 };
 use crate::openocd::{
     OpenOcdOptions, connect, connect_read_only, openocd_args, openocd_start_error, path_string,
@@ -55,6 +55,14 @@ struct Cli {
         help = "Print the user configuration directory and exit"
     )]
     config_dir: bool,
+
+    #[arg(
+        long,
+        global = true,
+        conflicts_with = "config_dir",
+        help = "Create a configuration file with commented examples and exit"
+    )]
+    config_init: bool,
 
     #[arg(short = 'v', long, global = true, help = "Show the OpenOCD log")]
     verbose: bool,
@@ -173,6 +181,11 @@ pub(crate) fn run() -> AppResult<()> {
 }
 
 fn execute(cli: &Cli) -> AppResult<()> {
+    if cli.config_init {
+        let path = init_config(cli.config.as_deref())?;
+        println!("Created {}", path.display());
+        return Ok(());
+    }
     if cli.config_dir {
         println!("{}", config_directory()?.display());
         return Ok(());

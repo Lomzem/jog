@@ -94,7 +94,21 @@ It can also erase data outside your image in the same sector.
 The optional `jog.toml` file stores image names, paths, and addresses.
 Set connection options, such as JTAG, on the command line.
 
-Create or edit `jog.toml` in the directory where you run `jog`:
+To create an empty configuration file with commented examples, run:
+
+```text
+jog --config-init
+```
+
+This creates `jog.toml` in the directory shown by `jog --config-dir`.
+It creates missing directories and reports an error if the file already exists.
+To create the file in the current directory instead, run:
+
+```text
+jog --config-init --config jog.toml
+```
+
+Edit the file to add image names. For example:
 
 ```toml
 [images.application]

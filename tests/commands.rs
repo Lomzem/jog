@@ -140,6 +140,72 @@ fn config_directory_prints_path_without_loading_config_or_starting_openocd() {
 }
 
 #[test]
+fn config_init_creates_user_config_with_inactive_examples() {
+    let workspace = Workspace::new();
+    fs::write(workspace.0.join("jog.toml"), "invalid TOML").unwrap();
+    let config_home = workspace.0.join("user-config");
+    let config_path = config_home.join("jog/jog.toml");
+    let output = workspace
+        .command()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .arg("--config-init")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(config_path.to_str().unwrap()),
+        "{output:?}"
+    );
+    let template = fs::read_to_string(&config_path).unwrap();
+    assert!(template.contains("[images."), "{template}");
+    assert!(
+        template
+            .lines()
+            .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#')),
+        "{template}"
+    );
+    let output = workspace.run(&["--config", config_path.to_str().unwrap(), "images"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        format!("Config: {}\nNo images are defined.", config_path.display())
+    );
+}
+
+#[test]
+fn config_init_accepts_explicit_paths_and_preserves_existing_files() {
+    let workspace = Workspace::new();
+    for path in ["new-config.toml", "nested/config/jog.toml"] {
+        let output = workspace.run(&["--config", path, "--config-init"]);
+        assert!(output.status.success(), "{output:?}");
+        assert!(workspace.0.join(path).is_file());
+
+        let original = "# Existing configuration must be preserved.\n[images]\n";
+        fs::write(workspace.0.join(path), original).unwrap();
+        let output = workspace.run(&["--config", path, "--config-init"]);
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(
+            fs::read_to_string(workspace.0.join(path)).unwrap(),
+            original
+        );
+    }
+}
+
+#[test]
+fn config_init_conflicts_with_config_directory() {
+    let workspace = Workspace::new();
+    let config_home = workspace.0.join("user-config");
+    let output = workspace
+        .command()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["--config-init", "--config-dir"])
+        .output()
+        .unwrap();
+    assert_error(output, 2, "cannot be used with");
+    assert!(!config_home.exists());
+}
+
+#[test]
 fn rejects_missing_explicit_config_and_unknown_fields() {
     let workspace = Workspace::new();
     assert_error(

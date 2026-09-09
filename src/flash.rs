@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::{self, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -60,6 +61,67 @@ pub(crate) fn config_directory() -> AppResult<PathBuf> {
     directory
         .map(|path| path.join("jog"))
         .ok_or_else(|| AppError::Usage("cannot locate the user configuration directory".into()))
+}
+
+const CONFIG_TEMPLATE: &str = r#"# jog image configuration
+# All examples are comments. No images are defined yet.
+# To enable an example, remove the leading '# ' from its TOML lines.
+# Replace the example paths and check the addresses before use.
+# Relative file paths start from the directory that contains this file.
+# Use single quotes around paths, especially Windows paths.
+# Set connection options, such as --transport jtag, on the command line.
+#
+# ELF and AXF files supply their own addresses. Do not set addr for them.
+# [images.application]
+# description = 'Main application'
+# parts = [{ file = 'build/app.elf' }]
+#
+# BIN files need a flash address. 0x00400000 is the start of flash.
+# [images.application_bin]
+# parts = [{ file = 'build/app.bin', addr = 0x00400000 }]
+#
+# To write several files with one name, list each part. Data must not overlap.
+# [images.combined]
+# parts = [
+#     { file = 'build/part1.bin', addr = 0x00400000 },
+#     { file = 'build/part2.bin', addr = 0x00420000 },
+# ]
+#
+# List image names: jog images
+# Write an image: jog flash application
+# To select this file explicitly: jog --config path/to/jog.toml images
+"#;
+
+pub(crate) fn init_config(explicit: Option<&Path>) -> AppResult<PathBuf> {
+    let path = match explicit {
+        Some(path) => path.to_owned(),
+        None => config_directory()?.join("jog.toml"),
+    };
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            AppError::Runtime(format!("cannot create {}: {error}", parent.display()))
+        })?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                AppError::Usage(format!(
+                    "configuration file already exists: {}",
+                    path.display()
+                ))
+            } else {
+                AppError::Runtime(format!("cannot create {}: {error}", path.display()))
+            }
+        })?;
+    file.write_all(CONFIG_TEMPLATE.as_bytes())
+        .map_err(|error| AppError::Runtime(format!("cannot write {}: {error}", path.display())))?;
+    Ok(path)
 }
 
 pub(crate) fn load_config(explicit: Option<&Path>) -> AppResult<LoadedConfig> {
