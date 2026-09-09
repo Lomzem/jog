@@ -120,6 +120,26 @@ fn lists_split_image_from_config_relative_paths() {
 }
 
 #[test]
+fn config_directory_prints_path_without_loading_config_or_starting_openocd() {
+    let workspace = Workspace::new();
+    fs::write(workspace.0.join("jog.toml"), "invalid TOML").unwrap();
+    let config_home = workspace.0.join("user-config");
+    let output = workspace
+        .command()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .arg("--config-dir")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        config_home.join("jog").to_str().unwrap()
+    );
+    assert!(output.stderr.is_empty());
+    assert!(!config_home.exists());
+}
+
+#[test]
 fn rejects_missing_explicit_config_and_unknown_fields() {
     let workspace = Workspace::new();
     assert_error(

@@ -154,6 +154,14 @@ in this order:
 3. `$XDG_CONFIG_HOME/jog/jog.toml`, if that variable is set.
 4. `$HOME/.config/jog/jog.toml` on Linux, or `%APPDATA%\jog\jog.toml` on Windows.
 
+To print the user configuration directory and exit, run:
+
+```text
+jog --config-dir
+```
+
+This command prints a path even if the directory does not exist.
+
 
 ## Other commands
 

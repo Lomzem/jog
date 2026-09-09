@@ -47,6 +47,21 @@ pub(crate) enum FlashPlan {
     MultiBin(Vec<Range<u32>>),
 }
 
+pub(crate) fn config_directory() -> AppResult<PathBuf> {
+    let nonempty_env = |name| env::var_os(name).filter(|value| !value.is_empty());
+    if let Some(xdg) = nonempty_env("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(xdg).join("jog"));
+    }
+    let directory = if cfg!(windows) {
+        nonempty_env("APPDATA").map(PathBuf::from)
+    } else {
+        nonempty_env("HOME").map(|home| PathBuf::from(home).join(".config"))
+    };
+    directory
+        .map(|path| path.join("jog"))
+        .ok_or_else(|| AppError::Usage("cannot locate the user configuration directory".into()))
+}
+
 pub(crate) fn load_config(explicit: Option<&Path>) -> AppResult<LoadedConfig> {
     let executable = env::current_exe()
         .map_err(|error| AppError::Usage(format!("cannot locate the jog executable: {error}")))?;

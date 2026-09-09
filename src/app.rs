@@ -9,7 +9,8 @@ use std::thread;
 use std::time::Duration;
 
 use crate::flash::{
-    FlashPlan, load_config, plan_flash, prepare_flash_parts, verify_part, write_part,
+    FlashPlan, config_directory, load_config, plan_flash, prepare_flash_parts, verify_part,
+    write_part,
 };
 use crate::openocd::{
     OpenOcdOptions, connect, connect_read_only, openocd_args, openocd_start_error, path_string,
@@ -48,11 +49,18 @@ struct Cli {
     #[arg(long, global = true, help = "Image configuration file")]
     config: Option<PathBuf>,
 
+    #[arg(
+        long,
+        global = true,
+        help = "Print the user configuration directory and exit"
+    )]
+    config_dir: bool,
+
     #[arg(short = 'v', long, global = true, help = "Show the OpenOCD log")]
     verbose: bool,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -165,6 +173,14 @@ pub(crate) fn run() -> AppResult<()> {
 }
 
 fn execute(cli: &Cli) -> AppResult<()> {
+    if cli.config_dir {
+        println!("{}", config_directory()?.display());
+        return Ok(());
+    }
+    let command = cli
+        .command
+        .as_ref()
+        .ok_or_else(|| AppError::Usage("a command is required. Run jog --help for help.".into()))?;
     if cli.serial.as_ref().is_some_and(|s| s.contains('\0')) {
         return Err(AppError::Usage("serial number contains a null byte".into()));
     }
@@ -176,7 +192,7 @@ fn execute(cli: &Cli) -> AppResult<()> {
         verbose: cli.verbose,
     };
 
-    match &cli.command {
+    match command {
         Commands::Info => command_info(&options),
         Commands::Images => command_images(cli),
         Commands::Flash {
