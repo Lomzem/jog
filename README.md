@@ -227,5 +227,21 @@ On a Linux computer with Docker installed and running, run:
 ./build.sh
 ```
 
-The script runs tests and replaces `dist/` with the Ubuntu package and
-Windows executable. File names use the version in `Cargo.toml`.
+The script runs Linux tests and compiles Windows tests. It replaces `dist/`
+with the Linux executable, Ubuntu package, and Windows executable.
+File names use the version in `Cargo.toml`.
+
+### Automatic builds
+
+GitHub Actions runs the same build on each push and pull request.
+It also runs the Windows executable with `--version` and `--help` on Windows.
+You can also start the **Build** workflow manually from the **Actions** tab.
+Open a successful run and download the files from **Artifacts**:
+
+- `jog-linux-x86_64`: Linux executable, built on Ubuntu 24.04.
+- `jog-windows-x86_64`: Windows executable.
+- `jog-ubuntu-24.04-amd64`: Ubuntu 24.04 package.
+
+Extract the downloaded archive. On Linux, run
+`chmod +x jog-*-linux-x86_64` to give the executable permission to run.
+OpenOCD must be installed separately.

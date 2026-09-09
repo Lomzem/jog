@@ -36,6 +36,7 @@ RUN test -n "$PACKAGE_VERSION" \
     && install -Dm0755 target/x86_64-unknown-linux-gnu/release/jog /package/usr/bin/jog \
     && strip /package/usr/bin/jog \
     && /package/usr/bin/jog --version \
+    && install -Dm0755 /package/usr/bin/jog "/out/jog-${PACKAGE_VERSION}-linux-x86_64" \
     && install -Dm0644 README.md /package/usr/share/doc/jog/README.md \
     && install -Dm0755 target/x86_64-pc-windows-gnu/release/jog.exe "/out/jog-${PACKAGE_VERSION}-windows-x86_64.exe" \
     && x86_64-w64-mingw32-strip "/out/jog-${PACKAGE_VERSION}-windows-x86_64.exe" \

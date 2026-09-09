@@ -33,9 +33,10 @@ DOCKER_BUILDKIT=1 docker build \
     "${ROOT_DIR}"
 
 windows="${DIST_DIR}/jog-${version}-windows-x86_64.exe"
+linux="${DIST_DIR}/jog-${version}-linux-x86_64"
 deb="${DIST_DIR}/jog_${version}_amd64.deb"
-[[ -f "${windows}" && -f "${deb}" ]] || {
+[[ -f "${windows}" && -f "${linux}" && -f "${deb}" ]] || {
     echo "error: Docker did not produce the expected release artifacts" >&2
     exit 1
 }
-printf 'Created:\n  %s\n  %s\n' "${windows}" "${deb}"
+printf 'Created:\n  %s\n  %s\n  %s\n' "${linux}" "${windows}" "${deb}"

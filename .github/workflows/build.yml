@@ -1,0 +1,65 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Linux and Windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Test and build
+        run: ./build.sh
+
+      - name: Upload Linux executable
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: jog-linux-x86_64
+          path: dist/jog-*-linux-x86_64
+          if-no-files-found: error
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: jog-windows-x86_64
+          path: dist/jog-*-windows-x86_64.exe
+          if-no-files-found: error
+
+      - name: Upload Ubuntu package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: jog-ubuntu-24.04-amd64
+          path: dist/jog_*_amd64.deb
+          if-no-files-found: error
+
+  windows-check:
+    name: Check Windows executable
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Download Windows executable
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: jog-windows-x86_64
+          path: dist
+
+      - name: Check version and help
+        shell: pwsh
+        run: |
+          $executable = (Get-Item dist/jog-*-windows-x86_64.exe).FullName
+          & $executable --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $executable --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
