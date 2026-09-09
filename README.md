@@ -1,191 +1,209 @@
 # jog
 
-`jog` controls an ATSAM4E8C through an Atmel-ICE probe. It uses OpenOCD.
-The default link is SWD at 400 kHz.
+`jog` is a command-line tool for the ATSAM4E8C microcontroller.
+It uses an Atmel-ICE probe and OpenOCD to connect to your board.
+**Target** means the microcontroller on your board.
+
+With `jog`, you can:
+
+- Show target information and check the connection.
+- Write firmware to flash memory and verify the data.
+- Save names for firmware files in a TOML configuration file.
+- Read memory, erase flash, and reset or stop the target.
+- Select flash or ROM boot, or start a GDB server for debugging.
 
 ## Install
 
-Install OpenOCD 0.12 or a current development build. Make sure that `openocd`
-is on `PATH`. Run:
+You need an Atmel-ICE probe, a target board, and OpenOCD 0.12 or later.
+On Windows, also install the Atmel-ICE USB driver for OpenOCD.
+Make sure that this command works in your terminal:
 
 ```text
 openocd --version
 ```
 
-Some development builds crash when `--serial` selects a CMSIS-DAP HID probe.
-The installed build `0.12.0-01004-g9ea7f3d64-dirty` has this defect. Use a
-build with the [upstream serial buffer fix](https://github.com/openocd-org/openocd/commit/e01e180f6248590348bad5c354c6b4e0cf1a956a).
-The local hardware tests use this fixed build:
-
-```text
-target/release/jog --openocd backups/hardware-test/openocd-fixed/local/bin/openocd --transport jtag info
-```
-
-This local OpenOCD build is in the ignored test directory. It is not part of
-the package. On another computer, use the path and probe serial for that computer.
-
-On Ubuntu 24.04 amd64, install the Debian package:
+**Ubuntu 24.04, amd64:** Install the package from the `dist` directory:
 
 ```text
 sudo apt install ./dist/jog_0.1.0_amd64.deb
 ```
 
-On Windows x64:
+**Windows, x64:** Rename `jog-0.1.0-windows-x86_64.exe` to `jog.exe`.
+Add its directory to `PATH` to use `jog` from any directory.
 
-1. Install OpenOCD 0.12 and its Atmel-ICE USB driver.
-2. Run `openocd --version`.
-3. Rename `jog-0.1.0-windows-x86_64.exe` to `jog.exe`, or use the full file name.
-4. Add its directory to `PATH` if you want to use `jog` from all directories.
-5. Run `jog info`.
+To create these files from source, see [Build from source](#build-from-source).
 
 ## First use
 
-Connect the probe and target. Then run:
+1. Connect the Atmel-ICE to your computer and target board.
+2. Supply power to the target board.
+3. Check the connection:
+
+   ```text
+   jog info
+   ```
+
+The default connection is SWD at 400 kHz. If your board uses JTAG, add
+`--transport jtag` to your commands:
 
 ```text
-jog info
-jog --help
-
-# For a JTAG connection:
 jog --transport jtag info
 ```
 
-Use `--openocd PATH` if OpenOCD is not on `PATH`. Use `--serial SERIAL` if
-more than one Atmel-ICE is connected. Run `jog COMMAND --help` for option
-details.
+## Write firmware
 
-## Common workflows
+An **image** is firmware data. Replace the example paths with your own paths.
 
-Program a raw BIN file:
+For an ELF file, the file supplies the addresses:
+
+```text
+jog flash build/app.elf
+```
+
+For a BIN file, you must supply its flash address:
 
 ```text
 jog flash build/app.bin --addr 0x00400000
 ```
 
-Program an ELF file through JTAG and keep the target halted:
+Check the address required by your firmware.
+`0x00400000` is the start of flash on this target.
+
+By default, `flash` erases the required flash areas, writes the image,
+verifies the data, and resets the target to run.
+To keep the target stopped after the write, add `--no-run`:
 
 ```text
-jog --transport jtag flash build/bootloader.elf --no-run
+jog flash build/app.elf --no-run
 ```
 
-`jog` accepts raw BIN files and little-endian ARM ELF32 executable files
-with `.elf` or `.axf` extensions. BIN files need `--addr`. ELF files use their
-physical load addresses; do not give them `--addr`. The tool checks all load
-ranges before erase. It writes the initial values for RAM to their flash load
-addresses. It does not write ELF memory areas that have no file data.
-HEX and S-record files are not supported.
-
-By default, `flash` erases, writes, verifies, and resets the target to run.
-It does not change the boot source. To select flash boot and reset, run:
+`flash` does not change the boot source. To select flash boot and reset, run:
 
 ```text
-jog --transport jtag boot flash
+jog boot flash
 ```
 
-Use `--no-run` with `flash` to keep the target halted. Use `--no-verify` only
-if a different process verifies the image.
+Supported formats: raw BIN and little-endian ARM ELF32 (`.elf` or `.axf`).
+Do not use `--addr` with ELF or AXF. HEX and S-record are not supported.
 
-For `flash` and `erase`, an address below `0x00400000` is a flash offset. The
-values `0x7a000` and `0x47a000` select the same address. `read` always uses an
-absolute address.
+**Data loss:** A flash erase operates on whole sectors.
+It can also erase data outside your image in the same sector.
 
-Read-only commands restore a running target to its entry state. A target that
-was halted stays halted.
+## Save image names in jog.toml
 
-After ROM boot, the tested device can stall debug access for about 18 seconds.
-The tool allows a 20-second wait before its final connection attempt when
-OpenOCD reports repeated debug-port stalls.
+The optional `jog.toml` file stores image names, paths, and addresses.
+Set connection options, such as JTAG, on the command line.
 
-## Named images
-
-The configuration file is optional. `jog` uses the first file in this list:
-
-1. The path from `--config`.
-2. `jog.toml` in the current directory.
-3. `jog.toml` beside the executable.
-4. `$XDG_CONFIG_HOME/jog/jog.toml`.
-5. `$HOME/.config/jog/jog.toml` on Linux.
-6. `%APPDATA%\jog\jog.toml` on Windows.
-
-Relative image paths start in the configuration file directory. This example
-uses generic file names. Set each path to the local image file.
+Create or edit `jog.toml` in the directory where you run `jog`:
 
 ```toml
 [images.application]
+description = 'Main application'
+parts = [{ file = 'build/app.elf' }]
+
+[images.application_bin]
 parts = [{ file = 'build/app.bin', addr = 0x00400000 }]
-
-[images.bootloader]
-parts = [
-    { file = 'build/bootloader-part1.bin', addr = 0x400000 },
-    { file = 'build/bootloader-part2.bin', addr = 0x47a000 },
-]
-
-[images.bootloader_elf]
-parts = [{ file = 'build/bootloader.elf' }]
 ```
 
-List and program a named image:
+- `application` and `application_bin` are names that you choose.
+- `description` is optional text shown by `jog images`.
+- `parts` lists the files to write for that name.
+- `file` is the path to a firmware file.
+- `addr` is required for BIN files. Omit it for ELF and AXF files.
+
+Relative file paths start from the directory that contains `jog.toml`.
+Use single quotes around paths, especially Windows paths.
+
+List the names, then write one image:
 
 ```text
 jog images
 jog flash application
-jog --transport jtag flash bootloader --no-run
 ```
 
-A named image can contain BIN files with addresses and ELF files without
-addresses. The load ranges must not overlap. `jog` checks all parts, erases
-all ranges, writes all parts, and then verifies all parts. Use single quotes
-for Windows paths in TOML.
+For image names, set addresses in TOML. Do not add `--addr`.
 
-The bootloader example writes pt1 at `0x400000` and pt2 at `0x47a000`.
-It does not fill the gap between the parts. ELF load segments can also have
-gaps. Whole flash sectors outside the load ranges keep their data. Erase
-ranges extend to sector boundaries, so bytes outside a part in the same
-boundary sector can be erased. Separate parts that share a sector are all
-written after the erase operations.
+### Write several files with one name
 
-## Safety
+Add each file to the same `parts` list:
 
-Check the image and address before you change flash.
+```toml
+[images.combined]
+parts = [
+    { file = 'build/part1.bin', addr = 0x00400000 },
+    { file = 'build/part2.bin', addr = 0x00420000 },
+]
+```
 
-`jog erase` needs terminal confirmation. Use `--yes` only in controlled
-automation. The command fails before it starts OpenOCD if standard input is not
-a terminal and `--yes` is absent.
+Check the addresses. The file data must not overlap.
+Run `jog flash combined` to write and verify all parts.
 
-GPNVM bit 0 disables JTAG and SWD. You must use `--force` to set it. The ERASE
-pin restores debug access and erases all flash.
+### Use a different configuration file
 
-Do not use `raw` for normal work. It bypasses address, image, and GPNVM safety
-checks.
+Select a file with `--config`:
 
-Use the transport that matches the target wiring. JTAG and SWD passed the
-hardware tests at 400 kHz. Higher speeds were not tested in this validation.
+```text
+jog --config config/images.toml flash application
+```
 
-## Build
+This file must exist. Without `--config`, `jog` uses the first file found
+in this order:
 
-Start Docker on a Linux host. Then run:
+1. `jog.toml` in the current directory.
+2. `jog.toml` beside the `jog` executable.
+3. `$XDG_CONFIG_HOME/jog/jog.toml`, if that variable is set.
+4. `$HOME/.config/jog/jog.toml` on Linux, or `%APPDATA%\jog\jog.toml` on Windows.
+
+
+## Other commands
+
+| Task | Command |
+| --- | --- |
+| Show target information | `jog info` |
+| Read 256 bytes from flash | `jog read 0x00400000 256` |
+| Save those bytes to a file | `jog read 0x00400000 256 --out readback.bin` |
+| Reset and run the target | `jog reset` |
+| Reset and keep the target stopped | `jog reset --halt` |
+| Stop the target | `jog halt` |
+| Continue from the stopped state | `jog resume` |
+| Select ROM (SAM-BA) boot and reset | `jog boot rom` |
+| Start a GDB server on port 3333 | `jog gdb` |
+| Erase all flash | `jog erase` |
+
+`read` requires an absolute address. For `flash` and `erase`,
+you can also use offsets: `0` means `0x00400000`.
+
+`jog erase` asks for confirmation. For a range, use `--start` and `--end`.
+The end address is not included.
+
+For advanced commands, see `jog gpnvm --help` and `jog raw --help`.
+GPNVM bit 0 disables debug access. `raw` skips safety checks.
+
+## Help and connection options
+
+```text
+jog --help
+jog flash --help
+```
+
+| Need | Option example |
+| --- | --- |
+| Use JTAG | `jog --transport jtag info` |
+| Select one of several probes | `jog --serial SERIAL info` |
+| Set the OpenOCD path | `jog --openocd /path/to/openocd info` |
+| Show the OpenOCD log | `jog --verbose info` |
+
+If OpenOCD crashes with `--serial`, see the
+[known issue and correction](docs/hardware-validation.md#software).
+A connection after ROM boot can take about 20 seconds.
+
+## Build from source
+
+On a Linux computer with Docker installed and running, run:
 
 ```text
 ./build.sh
 ```
 
-The script runs the locked tests and creates:
-
-```text
-dist/jog-0.1.0-windows-x86_64.exe
-dist/jog_0.1.0_amd64.deb
-```
-
-The version comes from `Cargo.toml`.
-
-## Validation status
-
-Hardware tests used the connected Atmel-ICE and ATSAM4E8C.
-JTAG and SWD passed at 400 kHz. Tests covered all three supplied ELF files,
-both bootloader BIN parts, readback, the gap, control commands, ROM boot,
-GPNVM, range erase, full erase, and a GDB protocol connection.
-
-See [the hardware test record](docs/hardware-validation.md) for the results
-and limits. The Linux release build, unit tests, command tests, Clippy, and
-Windows compile checks passed. Docker was not running, so package builds
-were not run in this session.
+The script runs tests and replaces `dist/` with the Ubuntu package and
+Windows executable. File names use the version in `Cargo.toml`.
