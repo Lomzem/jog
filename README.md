@@ -274,14 +274,16 @@ Update the version in `Cargo.toml` and `Cargo.lock`, then commit your changes.
 Tag the current commit and push the tag:
 
 ```text
-just tag v0.1.0
+just tag
 ```
 
-The tag must match the Cargo version, and the working tree must be clean.
+Both commands read the version from `Cargo.toml` and prefix it with `v`.
+For example, version `0.1.0` becomes tag `v0.1.0`.
+The working tree must be clean before tagging.
 Pushing the tag starts the Build workflow. Start the release command right away:
 
 ```text
-just release v0.1.0
+just release
 ```
 
 The command finds the latest Build run triggered by pushing that tag and waits
@@ -291,8 +293,9 @@ It checks that the run used the tagged commit, downloads all three artifacts to
 a temporary directory, and publishes their files with generated release notes.
 A failed build stops publication.
 
-To select a specific push or manual Build run of the same commit, you can still
-pass its numeric Actions run ID as an optional second argument.
+You can still pass a tag explicitly, such as `just release v0.1.0`.
+To select a specific push or manual Build run of the same commit, pass the tag
+and its numeric Actions run ID, such as `just release v0.1.0 123456789`.
 Pull request runs are rejected.
 
 The release command requires the tag to exist on `origin` and refuses to replace

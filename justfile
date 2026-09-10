@@ -5,11 +5,12 @@ default:
     @just --list
 
 # Tag HEAD with the Cargo version and push the tag to origin.
-tag tag:
+tag tag="":
     #!/usr/bin/env bash
     set -euo pipefail
     tag="$1"
     version="$(sed -n '/^\[package\]$/,/^\[/{s/^version = "\([^"]*\)"$/\1/p;}' Cargo.toml)"
+    tag="${tag:-v$version}"
     if [[ -z "$version" || "$tag" != "v$version" ]]; then
         echo "error: tag must match Cargo.toml version: v$version" >&2
         exit 1
@@ -29,12 +30,20 @@ tag tag:
     fi
     git push origin "refs/tags/$tag:refs/tags/$tag"
 
-# Find the tag's Build run, wait for success, and publish its artifacts.
-release tag run_id="":
+# Release the Cargo version by default, waiting for its Build run to succeed.
+release tag="" run_id="":
     #!/usr/bin/env bash
     set -euo pipefail
     tag="$1"
     run_id="$2"
+    if [[ -z "$tag" ]]; then
+        version="$(sed -n '/^\[package\]$/,/^\[/{s/^version = "\([^"]*\)"$/\1/p;}' Cargo.toml)"
+        [[ -n "$version" ]] || {
+            echo "error: Cargo package version was not found" >&2
+            exit 1
+        }
+        tag="v$version"
+    fi
     git check-ref-format "refs/tags/$tag"
     [[ "$tag" == v* && ( -z "$run_id" || "$run_id" =~ ^[0-9]+$ ) ]] || {
         echo "error: provide a v-prefixed tag and, optionally, a numeric Actions run ID" >&2
