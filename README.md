@@ -263,3 +263,40 @@ Open a successful run and download the files from **Artifacts**:
 Extract the downloaded archive. On Linux, run
 `chmod +x jog-*-linux-x86_64` to give the executable permission to run.
 OpenOCD must be installed separately.
+
+### Publish a release
+
+Install `just` and the GitHub CLI, then authenticate with `gh auth login`.
+Run these commands in Bash on Linux, macOS, or Windows with Git Bash.
+Your `origin` remote must point to the GitHub repository you want to release.
+
+Update the version in `Cargo.toml` and `Cargo.lock`, then commit your changes.
+Tag the current commit and push the tag:
+
+```text
+just tag v0.1.0
+```
+
+The tag must match the Cargo version, and the working tree must be clean.
+Pushing the tag starts the Build workflow. Find its run ID in the Actions run
+URL or with `gh run list --workflow build.yml --branch v0.1.0`.
+Wait for the entire run to succeed, including the Windows check, then publish:
+
+```text
+just release v0.1.0 RUN_ID
+```
+
+Replace `RUN_ID` with the numeric run ID. The command checks that the successful
+Build run used the tagged commit, downloads all three artifacts to a temporary
+directory, and publishes their files with generated release notes.
+You can also use a successful push or manual Build run of the same commit.
+Pull request runs are rejected.
+
+The release command requires the tag to exist on `origin` and refuses to replace
+an existing release. If a tag push fails, rerun `just tag` from the same commit.
+For a failed build, fix the problem before choosing a new version and tag.
+If artifact download fails, retry the release command once the artifacts are available.
+If an upload fails after GitHub creates a draft release, inspect that draft in
+GitHub Releases. Delete the incomplete draft while keeping its tag, then retry.
+See the [GitHub CLI release documentation](https://cli.github.com/manual/gh_release_create)
+for release creation options.
