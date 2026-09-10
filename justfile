@@ -4,11 +4,25 @@ set positional-arguments
 default:
     @just --list
 
-# Tag HEAD with the Cargo version and push the tag to origin.
-tag tag="":
+# Tag HEAD with the Cargo version; use --force or -f to overwrite it.
+tag *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    tag="$1"
+    tag=""
+    force=false
+    for arg in "$@"; do
+        case "$arg" in
+            --force|-f) force=true ;;
+            -*) echo "error: unknown option: $arg" >&2; exit 1 ;;
+            *)
+                [[ -z "$tag" ]] || {
+                    echo "error: usage: just tag [TAG] [--force|-f]" >&2
+                    exit 1
+                }
+                tag="$arg"
+                ;;
+        esac
+    done
     version="$(sed -n '/^\[package\]$/,/^\[/{s/^version = "\([^"]*\)"$/\1/p;}' Cargo.toml)"
     tag="${tag:-v$version}"
     if [[ -z "$version" || "$tag" != "v$version" ]]; then
@@ -20,9 +34,14 @@ tag tag="":
         exit 1
     fi
     git check-ref-format "refs/tags/$tag"
+    if [[ "$force" == true ]]; then
+        git tag --force -a "$tag" -m "Release $tag"
+        git push origin "+refs/tags/$tag:refs/tags/$tag"
+        exit 0
+    fi
     if git show-ref --verify --quiet "refs/tags/$tag"; then
         [[ "$(git rev-parse "refs/tags/$tag^{commit}")" == "$(git rev-parse HEAD)" ]] || {
-            echo "error: existing tag points to a different commit" >&2
+            echo "error: existing tag points to a different commit; use --force to replace it" >&2
             exit 1
         }
     else

@@ -300,7 +300,11 @@ Pull request runs are rejected.
 
 The release command requires the tag to exist on `origin` and refuses to replace
 an existing release. If a tag push fails, rerun `just tag` from the same commit.
-For a failed build, fix the problem before choosing a new version and tag.
+To move an existing tag to the current commit, run `just tag --force` or
+`just tag -f`. This replaces the local tag and force-pushes that tag to `origin`.
+You can also pass the tag explicitly, such as `just tag v0.1.0 --force`.
+The Cargo version and clean working tree checks still apply.
+This does not replace an existing GitHub Release or its uploaded files.
 If artifact download fails, retry the release command once the artifacts are available.
 If an upload fails after GitHub creates a draft release, inspect that draft in
 GitHub Releases. Delete the incomplete draft while keeping its tag, then retry.
