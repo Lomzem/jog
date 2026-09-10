@@ -1,6 +1,6 @@
 [package]
 name = "jog"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Friendly ATSAM4E8C CLI for an Atmel-ICE"
 
