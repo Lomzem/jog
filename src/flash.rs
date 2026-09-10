@@ -40,12 +40,23 @@ pub(crate) struct LoadedConfig {
 pub(crate) struct FlashPart {
     pub(crate) file: PathBuf,
     pub(crate) addr: u32,
-    elf: bool,
+    format: ImageFormat,
+    staged: Option<tempfile::NamedTempFile>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImageFormat {
+    Bin,
+    Elf,
+    IntelHex,
 }
 
 pub(crate) enum FlashPlan {
     Single,
-    MultiBin(Vec<Range<u32>>),
+    Ranges {
+        ranges: Vec<Range<u32>>,
+        parts: Vec<FlashPart>,
+    },
 }
 
 pub(crate) fn config_directory() -> AppResult<PathBuf> {
@@ -71,10 +82,14 @@ const CONFIG_TEMPLATE: &str = r#"# jog image configuration
 # Use single quotes around paths, especially Windows paths.
 # Set connection options, such as --transport jtag, on the command line.
 #
-# ELF and AXF files supply their own addresses. Do not set addr for them.
+# ELF, AXF, HEX, IHEX, and MCS files supply their own addresses. Omit addr.
 # [images.application]
 # description = 'Main application'
 # parts = [{ file = 'build/app.elf' }]
+#
+# Intel HEX files can contain several separated data ranges.
+# [images.firmware]
+# parts = [{ file = 'build/firmware.hex' }]
 #
 # BIN files need a flash address. 0x00400000 is the start of flash.
 # [images.application_bin]
@@ -243,7 +258,8 @@ pub(crate) fn prepare_flash_parts(
             .iter()
             .map(|part| {
                 Ok(FlashPart {
-                    elf: is_elf(&part.file),
+                    format: image_format(&part.file)?,
+                    staged: None,
                     file: part.file.clone(),
                     addr: validate_image_address(&part.file, part.addr, "named image")?,
                 })
@@ -263,7 +279,8 @@ pub(crate) fn prepare_flash_parts(
         }
         let addr = validate_image_address(&file, addr.map(u64::from), "image file")?;
         vec![FlashPart {
-            elf: is_elf(&file),
+            format: image_format(&file)?,
+            staged: None,
             file,
             addr,
         }]
@@ -283,7 +300,7 @@ pub(crate) fn prepare_flash_parts(
     Ok(parts)
 }
 
-fn validate_image_format(path: &Path) -> AppResult<()> {
+fn image_format(path: &Path) -> AppResult<ImageFormat> {
     let extension = path
         .extension()
         .and_then(OsStr::to_str)
@@ -295,8 +312,10 @@ fn validate_image_format(path: &Path) -> AppResult<()> {
             ))
         })?;
     match extension.as_str() {
-        "bin" | "elf" | "axf" => Ok(()),
-        "hex" | "ihex" | "s19" | "srec" => Err(AppError::Usage(format!(
+        "bin" => Ok(ImageFormat::Bin),
+        "elf" | "axf" => Ok(ImageFormat::Elf),
+        "hex" | "ihex" | "mcs" => Ok(ImageFormat::IntelHex),
+        "s19" | "srec" => Err(AppError::Usage(format!(
             "self-addressed image {} cannot be validated before erase; use a raw .bin with an address",
             path.display()
         ))),
@@ -308,11 +327,10 @@ fn validate_image_format(path: &Path) -> AppResult<()> {
 }
 
 fn validate_image_address(path: &Path, addr: Option<u64>, context: &str) -> AppResult<u32> {
-    validate_image_format(path)?;
-    if is_elf(path) {
+    if image_format(path)? != ImageFormat::Bin {
         if addr.is_some() {
             return Err(AppError::Usage(format!(
-                "ELF in {context} uses its own load addresses; remove the address"
+                "image in {context} uses its own load addresses; remove the address"
             )));
         }
         return Ok(0);
@@ -327,48 +345,87 @@ pub(crate) fn plan_flash(parts: &[FlashPart], flash_end: u32) -> AppResult<Flash
         return Err(AppError::Usage("image has no parts".into()));
     }
     let mut ranges = Vec::new();
+    let mut prepared = Vec::new();
     for part in parts {
-        if part.elf {
+        if part.format != ImageFormat::Bin {
             let data = fs::read(&part.file).map_err(|error| {
                 AppError::Usage(format!("cannot read {}: {error}", part.file.display()))
             })?;
+            if part.format == ImageFormat::IntelHex {
+                let chunks = crate::ihex::parse(&data, FLASH_BASE, flash_end).map_err(|error| {
+                    AppError::Usage(format!(
+                        "invalid Intel HEX {}: {error}",
+                        part.file.display()
+                    ))
+                })?;
+                for chunk in chunks {
+                    ranges.push(chunk.address..chunk.address + chunk.data.len() as u32);
+                    // Program the decoded bytes, avoiding a second HEX parser's address rules.
+                    let mut staged = tempfile::NamedTempFile::new().map_err(stage_error)?;
+                    staged.write_all(&chunk.data).map_err(stage_error)?;
+                    staged.flush().map_err(stage_error)?;
+                    path_string(staged.path())?;
+                    prepared.push(FlashPart {
+                        file: part.file.clone(),
+                        addr: chunk.address,
+                        format: ImageFormat::Bin,
+                        staged: Some(staged),
+                    });
+                }
+                continue;
+            }
             ranges.extend(elf_ranges(&data, flash_end).map_err(|error| {
                 AppError::Usage(format!("invalid ELF {}: {error}", part.file.display()))
             })?);
         } else {
             ranges.push(validate_part_range(part, flash_end)?);
         }
+        prepared.push(FlashPart {
+            file: part.file.clone(),
+            addr: part.addr,
+            format: part.format,
+            staged: None,
+        });
     }
-    for (index, left) in ranges.iter().enumerate() {
-        for right in &ranges[index + 1..] {
-            if left.start < right.end && right.start < left.end {
-                return Err(AppError::Usage(format!(
-                    "multi-part image ranges overlap: {:#010x}-{:#010x} and {:#010x}-{:#010x}",
-                    left.start,
-                    left.end - 1,
-                    right.start,
-                    right.end - 1
-                )));
-            }
+    ranges.sort_unstable_by_key(|range| range.start);
+    for pair in ranges.windows(2) {
+        let [left, right] = pair else { unreachable!() };
+        if right.start < left.end {
+            return Err(AppError::Usage(format!(
+                "image ranges overlap: {:#010x}-{:#010x} and {:#010x}-{:#010x}",
+                left.start,
+                left.end - 1,
+                right.start,
+                right.end - 1
+            )));
         }
     }
-    if parts.len() == 1 && !parts[0].elf {
+    if parts.len() == 1 && parts[0].format == ImageFormat::Bin {
         Ok(FlashPlan::Single)
     } else {
-        Ok(FlashPlan::MultiBin(ranges))
+        Ok(FlashPlan::Ranges {
+            ranges,
+            parts: prepared,
+        })
     }
 }
 
-fn is_elf(path: &Path) -> bool {
-    path.extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("elf") || extension.eq_ignore_ascii_case("axf")
-        })
+fn stage_error(error: io::Error) -> AppError {
+    AppError::Runtime(format!("cannot stage Intel HEX data before erase: {error}"))
 }
 
 fn image_type(part: &FlashPart) -> &'static str {
-    if part.elf { "elf" } else { "bin" }
+    match part.format {
+        ImageFormat::Bin => "bin",
+        ImageFormat::Elf => "elf",
+        ImageFormat::IntelHex => unreachable!("Intel HEX must be staged before programming"),
+    }
+}
+
+fn programming_path(part: &FlashPart) -> &Path {
+    part.staged
+        .as_ref()
+        .map_or(part.file.as_path(), |file| file.path())
 }
 
 // Only the file-backed portion of PT_LOAD is programmed. p_paddr is the
@@ -464,8 +521,8 @@ fn validate_part_range(part: &FlashPart, flash_end: u32) -> AppResult<Range<u32>
 }
 
 pub(crate) fn write_part(session: &mut Session, part: &FlashPart, erase: bool) -> AppResult<()> {
-    let path = tcl_literal(&path_string(&part.file)?);
-    let label = if part.elf {
+    let path = tcl_literal(&path_string(programming_path(part))?);
+    let label = if part.format == ImageFormat::Elf {
         format!("{} at ELF load addresses", part.file.display())
     } else {
         format!("{} @ {:#010x}", part.file.display(), part.addr)
@@ -487,7 +544,7 @@ pub(crate) fn write_part(session: &mut Session, part: &FlashPart, erase: bool) -
 }
 
 pub(crate) fn verify_part(session: &mut Session, part: &FlashPart) -> AppResult<()> {
-    let path = tcl_literal(&path_string(&part.file)?);
+    let path = tcl_literal(&path_string(programming_path(part))?);
     println!("Verifying {}...", part.file.display());
     session
         .run(&format!(
@@ -529,7 +586,7 @@ mod tests {
             validate_image_address(Path::new("x.elf"), None, "test").unwrap(),
             0
         );
-        assert!(validate_image_format(Path::new("x.txt")).is_err());
+        assert!(image_format(Path::new("x.txt")).is_err());
     }
 
     fn elf_fixture(segments: &[(u32, u32, u32, u32)]) -> Vec<u8> {
@@ -617,7 +674,8 @@ mod tests {
                 &[FlashPart {
                     file,
                     addr: 0,
-                    elf: true
+                    format: ImageFormat::Elf,
+                    staged: None
                 }],
                 0x480000
             )
@@ -651,7 +709,9 @@ mod tests {
         assert_eq!(image_type(&elf[0]), "elf");
         assert_eq!(elf[0].addr, 0);
         match plan_flash(&elf, 0x480000).unwrap() {
-            FlashPlan::MultiBin(ranges) => assert_eq!(ranges, vec![FLASH_BASE..FLASH_BASE + 4]),
+            FlashPlan::Ranges { ranges, .. } => {
+                assert_eq!(ranges, vec![FLASH_BASE..FLASH_BASE + 4])
+            }
             FlashPlan::Single => panic!("expected ELF load ranges"),
         }
 
@@ -678,6 +738,157 @@ mod tests {
         fs::write(&path, "[images.app]\nparts = [{ file = 'app.elf' }]\n").unwrap();
         let config = parse_config_file(&path).unwrap();
         assert!(config.images["app"].parts[0].addr.is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn hex_record(address: u16, kind: u8, bytes: &[u8]) -> String {
+        let mut record = vec![bytes.len() as u8, (address >> 8) as u8, address as u8, kind];
+        record.extend_from_slice(bytes);
+        record.push(0u8.wrapping_sub(record.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte))));
+        format!(
+            ":{}\n",
+            record
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<String>()
+        )
+    }
+
+    fn hex_fixture() -> String {
+        [
+            hex_record(0, 4, &[0, 0x40]),
+            hex_record(0, 0, &[1, 2, 3, 4]),
+            hex_record(4, 0, &[5, 6]),
+            hex_record(0, 4, &[0, 0x42]),
+            hex_record(0x1000, 0, &[7, 8, 9]),
+            hex_record(0, 1, &[]),
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn hex_aliases_stage_exact_bytes_at_absolute_addresses_and_clean_up() {
+        let dir = temp_dir();
+        let config = LoadedConfig {
+            path: None,
+            images: BTreeMap::new(),
+        };
+        for extension in ["hex", "ihex", "mcs", "HEX", "MCS"] {
+            let file = dir.join(format!("firmware.{extension}"));
+            fs::write(&file, hex_fixture()).unwrap();
+            assert!(validate_image_address(&file, Some(0), "test").is_err());
+            let input = prepare_flash_parts(file.to_str().unwrap(), None, &config).unwrap();
+            let plan = plan_flash(&input, 0x480000).unwrap();
+            let FlashPlan::Ranges { ranges, parts } = &plan else {
+                panic!("expected ranges")
+            };
+            assert_eq!(ranges, &[FLASH_BASE..FLASH_BASE + 6, 0x421000..0x421003]);
+            assert_eq!(parts.len(), 2);
+            // Changing the original after planning cannot change HEX writes or verification.
+            fs::write(&file, "changed").unwrap();
+            let paths: Vec<_> = parts
+                .iter()
+                .map(|part| programming_path(part).to_owned())
+                .collect();
+            for (part, address, bytes) in [
+                (&parts[0], FLASH_BASE, &[1, 2, 3, 4, 5, 6][..]),
+                (&parts[1], 0x421000, &[7, 8, 9][..]),
+            ] {
+                assert_eq!(part.addr, address);
+                assert_eq!(image_type(part), "bin");
+                assert_eq!(fs::read(programming_path(part)).unwrap(), bytes);
+                assert_eq!(part.file, fs::canonicalize(&file).unwrap());
+            }
+            drop(plan);
+            assert!(paths.iter().all(|path| !path.exists()));
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plans_mixed_named_images_and_rejects_cross_format_overlaps() {
+        let dir = temp_dir();
+        let config_path = dir.join("jog.toml");
+        fs::write(dir.join("firmware.mcs"), hex_fixture()).unwrap();
+        fs::write(dir.join("extra.bin"), [10, 11]).unwrap();
+        fs::write(
+            dir.join("extra.elf"),
+            elf_fixture(&[(0x430000, 0x430000, 4, 4)]),
+        )
+        .unwrap();
+        fs::write(&config_path, "[images.combined]\nparts = [{ file = 'firmware.mcs' }, { file = 'extra.bin', addr = 0x410000 }, { file = 'extra.elf' }]\n").unwrap();
+        let config = parse_config_file(&config_path).unwrap();
+        let mut input = prepare_flash_parts("combined", None, &config).unwrap();
+        let FlashPlan::Ranges { ranges, parts } = plan_flash(&input, 0x480000).unwrap() else {
+            panic!("expected ranges")
+        };
+        assert_eq!(
+            ranges,
+            vec![
+                FLASH_BASE..FLASH_BASE + 6,
+                0x410000..0x410002,
+                0x421000..0x421003,
+                0x430000..0x430004
+            ]
+        );
+        assert_eq!(parts.len(), 4);
+        input[1].addr = FLASH_BASE + 2;
+        assert!(
+            plan_flash(&input, 0x480000)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("overlap")
+        );
+        input[1].addr = 0x410000;
+        fs::write(
+            dir.join("extra.elf"),
+            elf_fixture(&[(FLASH_BASE, FLASH_BASE, 4, 4)]),
+        )
+        .unwrap();
+        assert!(
+            plan_flash(&input, 0x480000)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("overlap")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn malformed_hex_prevents_a_complete_plan() {
+        let dir = temp_dir();
+        let file = dir.join("invalid.hex");
+        fs::write(&file, hex_fixture().replace(":00000001FF", ":00000001FE")).unwrap();
+        let config = LoadedConfig {
+            path: None,
+            images: BTreeMap::new(),
+        };
+        let parts = prepare_flash_parts(file.to_str().unwrap(), None, &config).unwrap();
+        let error = plan_flash(&parts, 0x480000).err().unwrap().to_string();
+        assert!(error.contains("invalid Intel HEX"), "{error}");
+        assert!(error.contains("checksum"), "{error}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeps_hex_format_for_extensionless_symlink_targets() {
+        use std::os::unix::fs::symlink;
+        let dir = temp_dir();
+        let file = dir.join("data");
+        fs::write(&file, hex_fixture()).unwrap();
+        let link = dir.join("firmware.mcs");
+        symlink(&file, &link).unwrap();
+        let config = LoadedConfig {
+            path: None,
+            images: BTreeMap::new(),
+        };
+        let parts = prepare_flash_parts(link.to_str().unwrap(), None, &config).unwrap();
+        assert!(parts[0].format == ImageFormat::IntelHex);
+        assert_eq!(parts[0].file, fs::canonicalize(file).unwrap());
+        assert!(plan_flash(&parts, 0x480000).is_ok());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -772,17 +983,19 @@ mod tests {
         let parts = [
             FlashPart {
                 file: first,
-                elf: false,
+                format: ImageFormat::Bin,
+                staged: None,
                 addr: FLASH_BASE,
             },
             FlashPart {
                 file: second,
-                elf: false,
+                format: ImageFormat::Bin,
+                staged: None,
                 addr: FLASH_BASE + 8,
             },
         ];
         match plan_flash(&parts, FLASH_BASE + 1024).unwrap() {
-            FlashPlan::MultiBin(ranges) => assert_eq!(
+            FlashPlan::Ranges { ranges, .. } => assert_eq!(
                 ranges,
                 vec![FLASH_BASE..FLASH_BASE + 4, FLASH_BASE + 8..FLASH_BASE + 12]
             ),
@@ -801,12 +1014,14 @@ mod tests {
         let overlap = [
             FlashPart {
                 file: first,
-                elf: false,
+                format: ImageFormat::Bin,
+                staged: None,
                 addr: FLASH_BASE,
             },
             FlashPart {
                 file: second,
-                elf: false,
+                format: ImageFormat::Bin,
+                staged: None,
                 addr: FLASH_BASE + 4,
             },
         ];
@@ -823,7 +1038,8 @@ mod tests {
         fs::write(&past, [0; 5]).unwrap();
         let make = |file| FlashPart {
             file,
-            elf: false,
+            format: ImageFormat::Bin,
+            staged: None,
             addr: FLASH_BASE,
         };
         assert!(validate_part_range(&make(exact), FLASH_BASE + 4).is_ok());

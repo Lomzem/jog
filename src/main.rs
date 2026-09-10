@@ -1,5 +1,6 @@
 mod app;
 mod flash;
+mod ihex;
 mod openocd;
 mod target;
 

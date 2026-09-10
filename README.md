@@ -54,10 +54,11 @@ jog --transport jtag info
 
 An **image** is firmware data. Replace the example paths with your own paths.
 
-For an ELF file, the file supplies the addresses:
+For an ELF or Intel HEX file, the file supplies the addresses:
 
 ```text
 jog flash build/app.elf
+jog flash build/app.hex
 ```
 
 For a BIN file, you must supply its flash address:
@@ -83,11 +84,21 @@ jog flash build/app.elf --no-run
 jog boot flash
 ```
 
-Supported formats: raw BIN and little-endian ARM ELF32 (`.elf` or `.axf`).
-Do not use `--addr` with ELF or AXF. HEX and S-record are not supported.
+Supported formats are raw BIN, little-endian ARM ELF32 with `.elf` or `.axf`
+extensions, and Intel HEX with `.hex`, `.ihex`, or `.mcs` extensions.
+Do not use `--addr` with ELF or Intel HEX files.
+S-record is not supported.
+
+Intel HEX files can contain several data ranges with absolute addresses.
+`jog` checks the complete image before erasing. It rejects malformed records,
+invalid checksums, unsupported record types, data outside the target's flash,
+and overlapping data, even when the overlapping bytes match.
+Intel HEX start-address records do not change how `jog` resets and runs the target.
 
 **Data loss:** A flash erase operates on whole sectors.
 It can also erase data outside your image in the same sector.
+Gaps between Intel HEX data ranges follow the same erase behavior.
+Do not rely on data in those gaps surviving a flash operation.
 
 ## Save image names in jog.toml
 
@@ -117,13 +128,16 @@ parts = [{ file = 'build/app.elf' }]
 
 [images.application_bin]
 parts = [{ file = 'build/app.bin', addr = 0x00400000 }]
+
+[images.application_hex]
+parts = [{ file = 'build/app.hex' }]
 ```
 
-- `application` and `application_bin` are names that you choose.
+- Image names such as `application` are names that you choose.
 - `description` is optional text shown by `jog images`.
 - `parts` lists the files to write for that name.
 - `file` is the path to a firmware file.
-- `addr` is required for BIN files. Omit it for ELF and AXF files.
+- `addr` is required for BIN files. Omit it for ELF and Intel HEX files.
 
 Relative file paths start from the directory that contains `jog.toml`.
 Use single quotes around paths, especially Windows paths.
@@ -150,6 +164,9 @@ parts = [
 ```
 
 Check the addresses. The file data must not overlap.
+You can mix BIN, ELF, and Intel HEX parts. Each ELF or Intel HEX part supplies
+its own addresses. `jog` rejects overlaps within a file or between parts
+before erasing.
 Run `jog flash combined` to write and verify all parts.
 
 ### Use a different configuration file
@@ -192,8 +209,9 @@ This command prints a path even if the directory does not exist.
 | Start a GDB server on port 3333 | `jog gdb` |
 | Erase all flash | `jog erase` |
 
-`read` requires an absolute address. For `flash` and `erase`,
+`read` requires an absolute address. For BIN addresses and `erase` ranges,
 you can also use offsets: `0` means `0x00400000`.
+Addresses embedded in ELF and Intel HEX files are always absolute.
 
 `jog erase` asks for confirmation. For a range, use `--start` and `--end`.
 The end address is not included.

@@ -120,6 +120,72 @@ fn lists_split_image_from_config_relative_paths() {
 }
 
 #[test]
+fn lists_intel_hex_images_with_embedded_addresses() {
+    let workspace = Workspace::new();
+    let mut config = String::new();
+    for extension in ["hex", "ihex", "mcs"] {
+        fs::write(
+            workspace.0.join(format!("app.{extension}")),
+            ":020000040040BA\n:0400000001020304F2\n:00000001FF\n",
+        )
+        .unwrap();
+        config.push_str(&format!(
+            "[images.app_{extension}]\nparts = [{{ file = 'app.{extension}' }}]\n"
+        ));
+    }
+    fs::write(workspace.0.join("jog.toml"), config).unwrap();
+
+    let output = workspace.run(&["images"]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for extension in ["hex", "ihex", "mcs"] {
+        let line = stdout
+            .lines()
+            .find(|line| line.contains(&format!("app.{extension}")))
+            .unwrap_or_else(|| panic!("Missing {extension} image in {stdout}"));
+        assert!(line.contains("embedded addresses"), "{line}");
+        assert!(!line.contains("missing"), "{line}");
+    }
+}
+
+#[test]
+fn rejects_intel_hex_address_overrides_before_starting_openocd() {
+    let workspace = Workspace::new();
+    for extension in ["hex", "ihex", "mcs"] {
+        let filename = format!("app.{extension}");
+        fs::write(
+            workspace.0.join(&filename),
+            ":020000040040BA\n:0400000001020304F2\n:00000001FF\n",
+        )
+        .unwrap();
+        assert_error(
+            workspace.run(&["flash", &filename, "--addr", "0x00400000"]),
+            2,
+            "uses its own load addresses; remove the address",
+        );
+    }
+}
+
+#[test]
+fn rejects_intel_hex_address_overrides_in_config() {
+    let workspace = Workspace::new();
+    for extension in ["hex", "ihex", "mcs"] {
+        fs::write(
+            workspace.0.join("jog.toml"),
+            format!(
+                "[images.application]\nparts = [{{ file = 'app.{extension}', addr = 0x00400000 }}]\n"
+            ),
+        )
+        .unwrap();
+        assert_error(
+            workspace.run(&["images"]),
+            2,
+            "uses its own load addresses; remove the address",
+        );
+    }
+}
+
+#[test]
 fn config_directory_prints_path_without_loading_config_or_starting_openocd() {
     let workspace = Workspace::new();
     fs::write(workspace.0.join("jog.toml"), "invalid TOML").unwrap();

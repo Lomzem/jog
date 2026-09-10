@@ -92,9 +92,9 @@ enum Commands {
     Info,
     /// List named images
     Images,
-    /// Program a named image, BIN file, or ELF/AXF file
+    /// Program a named image, BIN, ELF/AXF, or Intel HEX file
     Flash {
-        #[arg(help = "Image name, .bin file, or .elf/.axf file")]
+        #[arg(help = "Image name or .bin/.elf/.axf/.hex/.ihex/.mcs file")]
         target: String,
         #[arg(short = 'a', long, help = "Flash address or offset for a raw .bin")]
         addr: Option<String>,
@@ -294,7 +294,7 @@ fn command_images(cli: &Cli) -> AppResult<()> {
         for part in image.parts {
             let location = match part.addr {
                 Some(addr) => format!("{:#010x}", normalize_flash_addr(addr)?),
-                None => "ELF addresses".to_owned(),
+                None => "embedded addresses".to_owned(),
             };
             let missing = if part.file.is_file() {
                 ""
@@ -328,7 +328,7 @@ fn command_flash(
                 verify_part(&mut session, &parts[0])?;
             }
         }
-        FlashPlan::MultiBin(ranges) => {
+        FlashPlan::Ranges { ranges, parts } => {
             for range in ranges {
                 println!("Erasing {:#010x}-{:#010x}...", range.start, range.end - 1);
                 session
