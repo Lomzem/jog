@@ -278,18 +278,21 @@ just tag v0.1.0
 ```
 
 The tag must match the Cargo version, and the working tree must be clean.
-Pushing the tag starts the Build workflow. Find its run ID in the Actions run
-URL or with `gh run list --workflow build.yml --branch v0.1.0`.
-Wait for the entire run to succeed, including the Windows check, then publish:
+Pushing the tag starts the Build workflow. Start the release command right away:
 
 ```text
-just release v0.1.0 RUN_ID
+just release v0.1.0
 ```
 
-Replace `RUN_ID` with the numeric run ID. The command checks that the successful
-Build run used the tagged commit, downloads all three artifacts to a temporary
-directory, and publishes their files with generated release notes.
-You can also use a successful push or manual Build run of the same commit.
+The command finds the latest Build run triggered by pushing that tag and waits
+for the entire run to succeed, including the Windows check. It retries discovery
+for about a minute if GitHub has not registered the run yet.
+It checks that the run used the tagged commit, downloads all three artifacts to
+a temporary directory, and publishes their files with generated release notes.
+A failed build stops publication.
+
+To select a specific push or manual Build run of the same commit, you can still
+pass its numeric Actions run ID as an optional second argument.
 Pull request runs are rejected.
 
 The release command requires the tag to exist on `origin` and refuses to replace

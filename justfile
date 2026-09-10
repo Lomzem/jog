@@ -29,21 +29,36 @@ tag tag:
     fi
     git push origin "refs/tags/$tag:refs/tags/$tag"
 
-# Publish the three artifacts from a successful Build run for this tag.
-release tag run_id:
+# Find the tag's Build run, wait for success, and publish its artifacts.
+release tag run_id="":
     #!/usr/bin/env bash
     set -euo pipefail
     tag="$1"
     run_id="$2"
     git check-ref-format "refs/tags/$tag"
-    [[ "$tag" == v* && "$run_id" =~ ^[0-9]+$ ]] || {
-        echo "error: provide a v-prefixed tag and a numeric Actions run ID" >&2
+    [[ "$tag" == v* && ( -z "$run_id" || "$run_id" =~ ^[0-9]+$ ) ]] || {
+        echo "error: provide a v-prefixed tag and, optionally, a numeric Actions run ID" >&2
         exit 1
     }
     GH_REPO="$(git remote get-url origin)"
     export GH_REPO
     git fetch origin "refs/tags/$tag:refs/tags/$tag"
     commit="$(git rev-parse "refs/tags/$tag^{commit}")"
+    if [[ -z "$run_id" ]]; then
+        echo "Looking for the Build run for $tag..."
+        for ((attempt = 1; attempt <= 12; attempt++)); do
+            run_id="$(gh run list --workflow build.yml --branch "$tag" --commit "$commit" \
+                --event push --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+            [[ -z "$run_id" ]] || break
+            if ((attempt < 12)); then sleep 5; fi
+        done
+        [[ -n "$run_id" ]] || {
+            echo "error: no Build run found for $tag; check GitHub Actions and retry" >&2
+            exit 1
+        }
+    fi
+    echo "Waiting for Build run $run_id..."
+    gh run watch "$run_id" --exit-status --interval 10
     run="$(gh run view "$run_id" --json headSha,status,conclusion,workflowName,event --jq '[.headSha, .status, .conclusion, .workflowName, .event] | join("|")')"
     if [[ "$run" != "$commit|completed|success|Build|push" && "$run" != "$commit|completed|success|Build|workflow_dispatch" ]]; then
         echo "error: run must be a successful Build push or manual run of the tagged commit" >&2
