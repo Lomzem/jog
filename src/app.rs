@@ -1,8 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::env;
 use std::fmt;
-use std::io::{self, IsTerminal, Write};
-use std::ops::Range;
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -13,8 +12,8 @@ use crate::flash::{
     verify_part, write_part,
 };
 use crate::openocd::{
-    OpenOcdOptions, connect, connect_read_only, openocd_args, openocd_start_error, path_string,
-    tcl_literal,
+    OpenOcdOptions, Session, connect, connect_read_only, openocd_args, openocd_start_error,
+    path_string, tcl_literal,
 };
 use crate::target::{
     ChipInfo, FLASH_BASE, SRAM_BASE, normalize_flash_addr, read_gpnvm, require_sam4e8c,
@@ -92,10 +91,12 @@ enum Commands {
     Info,
     /// List named images
     Images,
-    /// Program a named image, BIN, ELF/AXF, or Intel HEX file
+    /// Erase all flash, then program a named image, BIN, ELF/AXF, or Intel HEX file
     Flash {
-        #[arg(help = "Image name or .bin/.elf/.axf/.hex/.ihex/.mcs file")]
-        target: String,
+        #[arg(
+            help = "Image name or .bin/.elf/.axf/.hex/.ihex/.mcs file; read from stdin if omitted"
+        )]
+        target: Option<String>,
         #[arg(short = 'a', long, help = "Flash address or offset for a raw .bin")]
         addr: Option<String>,
         #[arg(long, help = "Do not verify after programming")]
@@ -121,8 +122,6 @@ enum Commands {
         start: Option<String>,
         #[arg(long, help = "Exclusive end address")]
         end: Option<String>,
-        #[arg(short = 'y', long, help = "Do not ask for confirmation")]
-        yes: bool,
     },
     /// Read memory to the terminal or a file
     Read {
@@ -213,12 +212,13 @@ fn execute(cli: &Cli) -> AppResult<()> {
             addr,
             no_verify,
             no_run,
-        } => command_flash(cli, &options, target, addr.as_deref(), !no_verify, !no_run),
+        } => {
+            let target = flash_target(target.as_deref())?;
+            command_flash(cli, &options, &target, addr.as_deref(), !no_verify, !no_run)
+        }
         Commands::Boot { mode, no_reset } => command_boot(&options, mode, !no_reset),
         Commands::Gpnvm { command } => command_gpnvm(&options, command),
-        Commands::Erase { start, end, yes } => {
-            command_erase(&options, start.as_deref(), end.as_deref(), *yes)
-        }
+        Commands::Erase { start, end } => command_erase(&options, start.as_deref(), end.as_deref()),
         Commands::Read { addr, length, out } => {
             command_read(&options, addr, length, out.as_deref())
         }
@@ -319,28 +319,33 @@ fn command_flash(
     let parts = prepare_flash_parts(target, addr.map(parse_flash_addr).transpose()?, &config)?;
     let mut session = connect(options)?;
     let chip = ChipInfo::read(&mut session)?;
-    let plan = plan_flash(&parts, chip.flash_end())?;
+    program_flash(&mut session, &parts, chip.flash_end(), verify, run_after)
+}
+
+pub(crate) fn program_flash(
+    session: &mut Session,
+    parts: &[crate::flash::FlashPart],
+    flash_end: u32,
+    verify: bool,
+    run_after: bool,
+) -> AppResult<()> {
+    let plan = plan_flash(parts, flash_end)?;
+    erase_all(session, (flash_end - FLASH_BASE) / 1024)?;
 
     match plan {
         FlashPlan::Single => {
-            write_part(&mut session, &parts[0], true)?;
+            write_part(session, &parts[0])?;
             if verify {
-                verify_part(&mut session, &parts[0])?;
+                verify_part(session, &parts[0])?;
             }
         }
-        FlashPlan::Ranges { ranges, parts } => {
-            for range in ranges {
-                println!("Erasing {:#010x}-{:#010x}...", range.start, range.end - 1);
-                session
-                    .run(&erase_range_command(&range))
-                    .map_err(AppError::flash_incomplete)?;
-            }
+        FlashPlan::Ranges { parts, .. } => {
             for part in &parts {
-                write_part(&mut session, part, false)?;
+                write_part(session, part)?;
             }
             if verify {
                 for part in &parts {
-                    verify_part(&mut session, part)?;
+                    verify_part(session, part)?;
                 }
             }
         }
@@ -352,12 +357,13 @@ fn command_flash(
     Ok(())
 }
 
-fn erase_range_command(range: &Range<u32>) -> String {
-    format!(
-        "flash erase_address pad unlock {:#x} {:#x}",
-        range.start,
-        range.end - range.start
-    )
+fn erase_all(session: &mut Session, size_kb: u32) -> AppResult<()> {
+    println!("Erasing the entire {size_kb} KB flash...");
+    session
+        .run("flash erase_sector 0 0 last")
+        .map_err(AppError::flash_incomplete)?;
+    println!("ok: erased the entire {size_kb} KB flash");
+    Ok(())
 }
 
 fn command_boot(options: &OpenOcdOptions, mode: &BootMode, reset_now: bool) -> AppResult<()> {
@@ -461,25 +467,16 @@ fn command_erase(
     options: &OpenOcdOptions,
     start: Option<&str>,
     end: Option<&str>,
-    yes: bool,
 ) -> AppResult<()> {
     let parsed_start = start.map(parse_flash_addr).transpose()?;
     let parsed_end = end.map(parse_flash_addr).transpose()?;
     let whole = parsed_start.is_none() && parsed_end.is_none();
-    let prompt = match (parsed_start, parsed_end) {
-        (None, None) => "Erase all target flash?".to_owned(),
-        (Some(a), None) => format!("Erase flash from {a:#010x} to the flash end?"),
-        (None, Some(b)) => format!("Erase flash before {b:#010x}?"),
-        (Some(a), Some(b)) if a < b => format!("Erase flash {a:#010x}-{:#010x}?", b - 1),
-        (Some(a), Some(b)) => {
-            return Err(AppError::Usage(format!(
-                "erase start {a:#010x} must be below end {b:#010x}"
-            )));
-        }
-    };
-    if !yes && !confirm(&prompt)? {
-        println!("Canceled. No flash was erased.");
-        return Err(AppError::Exit(1));
+    if let (Some(a), Some(b)) = (parsed_start, parsed_end)
+        && a >= b
+    {
+        return Err(AppError::Usage(format!(
+            "erase start {a:#010x} must be below end {b:#010x}"
+        )));
     }
 
     let mut session = connect(options)?;
@@ -493,21 +490,14 @@ fn command_erase(
             chip.flash_end()
         )));
     }
-    let what = if whole {
-        format!("the entire {} KB flash", chip.flash.size / 1024)
-    } else {
-        format!("flash {a:#010x}-{:#010x} ({} KB)", b - 1, (b - a) / 1024)
-    };
-    println!("Erasing {what}...");
     if whole {
-        session
-            .run("flash erase_sector 0 0 last")
-            .map_err(AppError::flash_incomplete)?;
-    } else {
-        session
-            .run(&format!("flash erase_address {a:#x} {:#x}", b - a))
-            .map_err(AppError::flash_incomplete)?;
+        return erase_all(&mut session, chip.flash.size / 1024);
     }
+    let what = format!("flash {a:#010x}-{:#010x} ({} KB)", b - 1, (b - a) / 1024);
+    println!("Erasing {what}...");
+    session
+        .run(&format!("flash erase_address {a:#x} {:#x}", b - a))
+        .map_err(AppError::flash_incomplete)?;
     println!("ok: erased {what}");
     Ok(())
 }
@@ -719,43 +709,40 @@ fn absolute_path(path: &Path) -> AppResult<PathBuf> {
     }
 }
 
-fn confirm(prompt: &str) -> AppResult<bool> {
-    require_confirmation_terminals(io::stdin().is_terminal(), io::stderr().is_terminal())?;
-    eprint!("{prompt} [y/N] ");
-    io::stderr()
-        .flush()
-        .map_err(|error| AppError::Runtime(format!("cannot write prompt: {error}")))?;
-    let mut answer = String::new();
-    io::stdin()
-        .read_line(&mut answer)
-        .map_err(|error| AppError::Runtime(format!("cannot read answer: {error}")))?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
-}
-
-fn require_confirmation_terminals(input: bool, error_output: bool) -> AppResult<()> {
-    if input && error_output {
-        Ok(())
-    } else {
-        Err(AppError::Usage(
-            "confirmation needs terminal input and error output. Use --yes for non-interactive use."
-                .into(),
-        ))
+fn flash_target(target: Option<&str>) -> AppResult<String> {
+    if let Some(target) = target {
+        return Ok(target.to_owned());
     }
+    let mut stdin = io::stdin();
+    if stdin.is_terminal() {
+        return Err(AppError::Usage(
+            "provide an image path or name as an argument or pipe it to jog flash".into(),
+        ));
+    }
+    let mut input = String::new();
+    stdin
+        .read_to_string(&mut input)
+        .map_err(|error| AppError::Usage(format!("cannot read image path from stdin: {error}")))?;
+    let mut lines = input.lines();
+    let target = lines
+        .next()
+        .filter(|line| !line.trim().is_empty())
+        .ok_or_else(|| {
+            AppError::Usage(
+                "provide an image path or name as an argument or pipe it to jog flash".into(),
+            )
+        })?;
+    if lines.next().is_some() {
+        return Err(AppError::Usage(
+            "stdin must contain exactly one image path or name".into(),
+        ));
+    }
+    Ok(target.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn requires_visible_interactive_confirmation() {
-        assert!(require_confirmation_terminals(true, true).is_ok());
-        assert!(require_confirmation_terminals(false, true).is_err());
-        assert!(require_confirmation_terminals(true, false).is_err());
-    }
 
     #[test]
     fn parses_supported_numbers() {
@@ -786,14 +773,6 @@ mod tests {
         assert!(validate_read_range(u32::MAX, 1).is_ok());
         assert!(validate_read_range(u32::MAX, 2).is_err());
         assert!(validate_read_range(0, 0).is_err());
-    }
-
-    #[test]
-    fn pads_multi_part_flash_erase_ranges() {
-        assert_eq!(
-            erase_range_command(&(FLASH_BASE + 1..FLASH_BASE + 5)),
-            "flash erase_address pad unlock 0x400001 0x4"
-        );
     }
 
     #[test]

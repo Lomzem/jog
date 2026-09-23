@@ -580,6 +580,153 @@ mod tests {
         (session, worker)
     }
 
+    fn flash_session(fail_erase: bool) -> (Session, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let worker = thread::spawn(move || {
+            let mut requests = Vec::new();
+            loop {
+                let request = read_request(&mut server);
+                let request = String::from_utf8(request[..request.len() - 1].to_vec()).unwrap();
+                if request == "shutdown" {
+                    return requests;
+                }
+                let failed = fail_erase && request.contains("flash erase_sector");
+                requests.push(request);
+                let response = if failed {
+                    format!("1\n{MARK}\nerase failed\x1a")
+                } else {
+                    format!("0\n{MARK}\n\x1a")
+                };
+                server.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let session = Session {
+            child: test_child(),
+            socket: Some(client),
+            log: Arc::new(Mutex::new(VecDeque::new())),
+            entry_state: "halted".into(),
+            resume_on_drop: false,
+        };
+        (session, worker)
+    }
+
+    fn flash_parts(path: &Path, addr: Option<u32>) -> Vec<crate::flash::FlashPart> {
+        let config = crate::flash::LoadedConfig {
+            path: None,
+            images: Default::default(),
+        };
+        crate::flash::prepare_flash_parts(path.to_str().unwrap(), addr, &config).unwrap()
+    }
+
+    fn flash_elf() -> Vec<u8> {
+        let mut data = vec![0; 88];
+        data[..7].copy_from_slice(b"\x7fELF\x01\x01\x01");
+        data[16..18].copy_from_slice(&2_u16.to_le_bytes());
+        data[18..20].copy_from_slice(&40_u16.to_le_bytes());
+        data[20..24].copy_from_slice(&1_u32.to_le_bytes());
+        data[28..32].copy_from_slice(&52_u32.to_le_bytes());
+        data[40..42].copy_from_slice(&52_u16.to_le_bytes());
+        data[42..44].copy_from_slice(&32_u16.to_le_bytes());
+        data[44..46].copy_from_slice(&1_u16.to_le_bytes());
+        for (field, value) in [
+            (0, 1_u32),
+            (4, 84),
+            (8, 0x00400000),
+            (12, 0x00400000),
+            (16, 4),
+            (20, 4),
+        ] {
+            data[52 + field..56 + field].copy_from_slice(&value.to_le_bytes());
+        }
+        data[84..].copy_from_slice(&[1, 2, 3, 4]);
+        data
+    }
+
+    #[test]
+    fn flash_erases_all_before_writing_and_verifying_bin_or_elf() {
+        let directory = tempfile::tempdir().unwrap();
+        for (extension, data, addr) in [
+            ("bin", vec![1, 2, 3, 4], Some(0x00400000)),
+            ("elf", flash_elf(), None),
+        ] {
+            let path = directory.path().join(format!("app.{extension}"));
+            std::fs::write(&path, data).unwrap();
+            let parts = flash_parts(&path, addr);
+            let (mut session, worker) = flash_session(false);
+            crate::app::program_flash(&mut session, &parts, 0x00480000, true, true).unwrap();
+            drop(session);
+            let requests = worker.join().unwrap();
+            assert_eq!(requests.len(), 4, "{requests:?}");
+            assert_eq!(requests[0], rpc_wrapper("flash erase_sector 0 0 last"));
+            assert!(
+                requests[1].contains("flash write_image unlock"),
+                "{requests:?}"
+            );
+            assert!(requests[2].contains("verify_image"), "{requests:?}");
+            assert_eq!(requests[3], rpc_wrapper("reset run"));
+        }
+    }
+
+    #[test]
+    fn flash_erases_once_before_all_parts_even_without_verify_or_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut parts = Vec::new();
+        for (index, addr) in [0x00400000, 0x00420000].into_iter().enumerate() {
+            let path = directory.path().join(format!("part{index}.bin"));
+            std::fs::write(&path, [1, 2, 3, 4]).unwrap();
+            parts.extend(flash_parts(&path, Some(addr)));
+        }
+        let (mut session, worker) = flash_session(false);
+        crate::app::program_flash(&mut session, &parts, 0x00480000, false, false).unwrap();
+        drop(session);
+        let requests = worker.join().unwrap();
+        assert_eq!(requests.len(), 3, "{requests:?}");
+        assert_eq!(requests[0], rpc_wrapper("flash erase_sector 0 0 last"));
+        assert!(
+            requests[1..]
+                .iter()
+                .all(|request| request.contains("flash write_image unlock")),
+            "{requests:?}"
+        );
+    }
+
+    #[test]
+    fn failed_flash_erase_prevents_writes_verification_and_reset() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("app.bin");
+        std::fs::write(&path, [1, 2, 3, 4]).unwrap();
+        let parts = flash_parts(&path, Some(0x00400000));
+        let (mut session, worker) = flash_session(true);
+        let error =
+            crate::app::program_flash(&mut session, &parts, 0x00480000, true, true).unwrap_err();
+        drop(session);
+        assert!(error.to_string().contains("erase failed"), "{error}");
+        assert_eq!(
+            worker.join().unwrap(),
+            [rpc_wrapper("flash erase_sector 0 0 last")]
+        );
+    }
+
+    #[test]
+    fn invalid_flash_image_prevents_erasing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("app.elf");
+        std::fs::write(&path, b"invalid ELF").unwrap();
+        let parts = flash_parts(&path, None);
+        let (mut session, worker) = flash_session(false);
+        assert!(crate::app::program_flash(&mut session, &parts, 0x00480000, true, true).is_err());
+        drop(session);
+        assert!(worker.join().unwrap().is_empty());
+    }
+
     #[test]
     fn reads_exact_bytes_at_an_unaligned_address() {
         let (mut session, worker) = memory_session("read_memory 0x400001 8 3", "0x00 127 0xff");

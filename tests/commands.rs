@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,6 +28,24 @@ impl Workspace {
             .arg(self.0.join("missing-openocd"))
             .stdin(Stdio::null());
         command
+    }
+
+    fn run_with_stdin(&self, args: &[&str], input: &str) -> Output {
+        let mut child = self
+            .command()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
     }
 
     fn run(&self, args: &[&str]) -> Output {
@@ -62,10 +81,11 @@ fn rejects_invalid_commands_before_starting_openocd() {
         (&["read", "0xffffffff", "2"], "32-bit address space"),
         (&["read", "0x400000", "0"], "length must be positive"),
         (
-            &["erase", "--start", "0x100", "--end", "0x100", "--yes"],
+            &["erase", "--start", "0x100", "--end", "0x100"],
             "must be below",
         ),
-        (&["erase"], "--yes"),
+        (&["erase", "--yes"], "unexpected argument"),
+        (&["erase", "-y"], "unexpected argument"),
         (
             &["flash", "missing-image"],
             "not an existing file or named image",
@@ -316,5 +336,76 @@ fn failed_openocd_startup_reports_log_and_stops_after_three_attempts() {
             .lines()
             .count(),
         3
+    );
+}
+
+#[test]
+fn erase_does_not_require_confirmation() {
+    let workspace = Workspace::new();
+    for args in [
+        vec!["erase"],
+        vec!["erase", "--start", "0", "--end", "0x100"],
+    ] {
+        assert_error(workspace.run(&args), 1, "could not start OpenOCD");
+    }
+}
+
+#[test]
+fn flash_accepts_piped_paths_and_image_names() {
+    let workspace = Workspace::new();
+    // ELF parsing happens after connection. This fixture only tests CLI resolution.
+    fs::write(workspace.0.join("test firmware.elf"), b"ELF fixture").unwrap();
+    fs::write(
+        workspace.0.join("jog.toml"),
+        "[images.application]\nparts = [{ file = 'test firmware.elf' }]\n",
+    )
+    .unwrap();
+    for input in [
+        "test firmware.elf\n",
+        "test firmware.elf\r\n",
+        "test firmware.elf",
+        "application\n",
+    ] {
+        assert_error(
+            workspace.run_with_stdin(&["flash"], input),
+            1,
+            "could not start OpenOCD",
+        );
+    }
+}
+
+#[test]
+fn flash_rejects_empty_or_multiple_stdin_targets() {
+    let workspace = Workspace::new();
+    for input in ["", "\n", " \r\n"] {
+        assert_error(
+            workspace.run_with_stdin(&["flash"], input),
+            2,
+            "provide an image path or name",
+        );
+    }
+    assert_error(
+        workspace.run_with_stdin(&["flash"], "first.elf\nsecond.elf\n"),
+        2,
+        "exactly one",
+    );
+    assert_error(
+        workspace.run_with_stdin(&["flash"], "missing.elf\n"),
+        2,
+        "not an existing file or named image",
+    );
+}
+
+#[test]
+fn flash_explicit_target_takes_precedence_over_stdin() {
+    let workspace = Workspace::new();
+    fs::write(workspace.0.join("app.bin"), [1, 2, 3, 4]).unwrap();
+    assert_error(
+        workspace.run_with_stdin(
+            &["flash", "app.bin", "--addr", "0"],
+            "missing.elf\nother.elf\n",
+        ),
+        1,
+        "could not start OpenOCD",
     );
 }

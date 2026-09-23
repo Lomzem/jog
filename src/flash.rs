@@ -54,6 +54,7 @@ enum ImageFormat {
 pub(crate) enum FlashPlan {
     Single,
     Ranges {
+        #[cfg(test)]
         ranges: Vec<Range<u32>>,
         parts: Vec<FlashPart>,
     },
@@ -404,6 +405,7 @@ pub(crate) fn plan_flash(parts: &[FlashPart], flash_end: u32) -> AppResult<Flash
         Ok(FlashPlan::Single)
     } else {
         Ok(FlashPlan::Ranges {
+            #[cfg(test)]
             ranges,
             parts: prepared,
         })
@@ -520,7 +522,7 @@ fn validate_part_range(part: &FlashPart, flash_end: u32) -> AppResult<Range<u32>
     Ok(address..end as u32)
 }
 
-pub(crate) fn write_part(session: &mut Session, part: &FlashPart, erase: bool) -> AppResult<()> {
+pub(crate) fn write_part(session: &mut Session, part: &FlashPart) -> AppResult<()> {
     let path = tcl_literal(&path_string(programming_path(part))?);
     let label = if part.format == ImageFormat::Elf {
         format!("{} at ELF load addresses", part.file.display())
@@ -528,10 +530,9 @@ pub(crate) fn write_part(session: &mut Session, part: &FlashPart, erase: bool) -
         format!("{} @ {:#010x}", part.file.display(), part.addr)
     };
     println!("Programming {label}...");
-    let erase = if erase { " erase" } else { "" };
     let output = session
         .run(&format!(
-            "flash write_image{erase} unlock {path} {:#x} {}",
+            "flash write_image unlock {path} {:#x} {}",
             part.addr,
             image_type(part)
         ))

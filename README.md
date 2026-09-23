@@ -61,6 +61,15 @@ jog flash build/app.elf
 jog flash build/app.hex
 ```
 
+You can also pipe one file path or saved image name into `flash`:
+
+```text
+echo build/app.elf | jog flash
+```
+
+Paths can contain spaces. Send the path on one line without surrounding quotes.
+If you also pass an image argument, `flash` uses that argument instead of stdin.
+
 For a BIN file, you must supply its flash address:
 
 ```text
@@ -70,8 +79,8 @@ jog flash build/app.bin --addr 0x00400000
 Check the address required by your firmware.
 `0x00400000` is the start of flash on this target.
 
-By default, `flash` erases the required flash areas, writes the image,
-verifies the data, and resets the target to run.
+`flash` erases all flash before writing the image. By default, it then
+verifies the data and resets the target to run.
 To keep the target stopped after the write, add `--no-run`:
 
 ```text
@@ -95,10 +104,8 @@ invalid checksums, unsupported record types, data outside the target's flash,
 and overlapping data, even when the overlapping bytes match.
 Intel HEX start-address records do not change how `jog` resets and runs the target.
 
-**Data loss:** A flash erase operates on whole sectors.
-It can also erase data outside your image in the same sector.
-Gaps between Intel HEX data ranges follow the same erase behavior.
-Do not rely on data in those gaps surviving a flash operation.
+Every `flash` command erases all existing flash data, including data outside
+the image and in gaps between its data ranges. It does not ask for confirmation.
 
 ## Save image names in jog.toml
 
@@ -213,8 +220,8 @@ This command prints a path even if the directory does not exist.
 you can also use offsets: `0` means `0x00400000`.
 Addresses embedded in ELF and Intel HEX files are always absolute.
 
-`jog erase` asks for confirmation. For a range, use `--start` and `--end`.
-The end address is not included.
+`jog erase` erases all flash immediately without confirmation.
+For a range, use `--start` and `--end`. The end address is not included.
 
 For advanced commands, see `jog gpnvm --help` and `jog raw --help`.
 GPNVM bit 0 disables debug access. `raw` skips safety checks.

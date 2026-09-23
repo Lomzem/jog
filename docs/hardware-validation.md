@@ -22,6 +22,10 @@ Serial selection passed with that build. No system OpenOCD files were changed.
 
 ## Flash tests
 
+These results predate automatic full erasure in `jog flash` and removal of
+the `erase --yes` option. Current flash operations erase all flash, including
+gaps between image parts.
+
 The files came from the ignored test directory. The table uses generic image
 labels; it does not contain the original file names.
 
