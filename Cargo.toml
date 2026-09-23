@@ -1,11 +1,11 @@
 [package]
 name = "jog"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Friendly ATSAM4E8C CLI for an Atmel-ICE"
 
 [dependencies]
-clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
+clap = { version = "4.5", default-features = false, features = ["derive", "error-context", "help", "std", "usage"] }
 serde = { version = "1", features = ["derive"] }
-toml = "1"
 tempfile = "3"
+toml = "1"
